@@ -18,7 +18,7 @@ The Spec Mode agent analyzes user requests and workspace context to generate det
 - Cucumber scenarios using Given-When-Then syntax
 - Behavior-driven development (BDD) specifications
 
-**Location:** `/copilot/spec.chatmode.md`
+**Location:** `.github/chatmodes/spec.chatmode.md`
 
 ### 🏗️ Design Mode (`design.chatmode.md`)
 **Purpose:** Translates specifications into detailed technical design documents.
@@ -31,7 +31,7 @@ The Design Mode agent takes specification files and creates comprehensive techni
 - Database schema changes
 - Detailed implementation guidance
 
-**Location:** `/copilot/design.chatmode.md`
+**Location:** `.github/chatmodes/design.chatmode.md`
 
 ### ✅ Tasks Mode (`tasks.chatmode.md`)
 **Purpose:** Generates granular, executable task lists from spec and design documents.
@@ -43,7 +43,7 @@ The Tasks Mode agent breaks down technical designs into atomic, step-by-step imp
 - Status tracking (Pending/In Progress/Complete)
 - Structured task lists saved to `.kodik` directory
 
-**Location:** `/copilot/tasks.chatmode.md`
+**Location:** `.github/chatmodes/tasks.chatmode.md`
 
 ### 🤖 Agent Mode (`agent.chatmode.md`)
 **Purpose:** Executes development tasks by strictly following predefined task lists.
@@ -55,25 +55,32 @@ The Agent Mode is the implementation executor that:
 - Ensures strict adherence to specifications and design
 - Provides automated development execution
 
-**Location:** `/copilot/agent.chatmode.md`
+**Location:** `.github/chatmodes/agent.chatmode.md`
 
 ## Supported Providers
 
 ### GitHub Copilot
-Currently, kodik only supports **GitHub Copilot** as the AI provider. All mode definitions are implemented as Copilot chat modes (`.chatmode.md` files) located in the `/copilot/` directory.
+kodik supports **GitHub Copilot** as an AI provider through custom chat modes (`.chatmode.md` files) located in the `.github/chatmodes/` directory.
 
 **Provider Files:**
-- `/copilot/agent.chatmode.md` - Agent execution mode
-- `/copilot/design.chatmode.md` - Technical design mode  
-- `/copilot/spec.chatmode.md` - Specification writing mode
-- `/copilot/tasks.chatmode.md` - Task breakdown mode
+- `.github/chatmodes/agent.chatmode.md` - Agent execution mode
+- `.github/chatmodes/design.chatmode.md` - Technical design mode  
+- `.github/chatmodes/spec.chatmode.md` - Specification writing mode
+- `.github/chatmodes/tasks.chatmode.md` - Task breakdown mode
+
+### Roo Code
+kodik also supports **Roo Code** through a comprehensive configuration file that defines all four specialized modes.
+
+**Configuration File:**
+- `.roomodes` - Complete Roo Coder configuration with all four kodik modes (spec, design, tasks, agent)
+
+The `.roomodes` file contains custom mode definitions that replicate the same structured workflow available in GitHub Copilot, allowing teams using Roo Coder to benefit from the complete kodik development methodology.
 
 ### Future Provider Support
 The mode definitions are designed to be easily portable to other AI coding assistants:
-- **Roo Code** (planned)
 - **OpenCode** (planned)
 
-Each provider will have its own directory structure following the same conceptual framework but adapted to the specific tool's configuration format.
+Each provider follows the same conceptual framework but is adapted to the specific tool's configuration format and capabilities.
 
 ## How to Use This
 
@@ -85,7 +92,7 @@ Each provider will have its own directory structure following the same conceptua
    - Choose "Workspace" to make the mode available to your project team
    - Enter the mode name (e.g., "kodik-spec", "kodik-design", etc.)
 
-2. **Copy Mode Definitions**: Replace the generated template with the content from the corresponding `.chatmode.md` files in this repository's `/copilot/` directory.
+2. **Copy Mode Definitions**: Replace the generated template with the content from the corresponding `.chatmode.md` files in this repository's `.github/chatmodes/` directory.
 
 3. **Default Location**: By default, VS Code stores workspace chat modes in `.github/chatmodes/` directory:
    ```
@@ -103,9 +110,29 @@ Each provider will have its own directory structure following the same conceptua
    - Use the **chat mode dropdown** at the top of the chat panel
    - Select your custom kodik modes from the dropdown list
 
+### Setting Up Custom Modes in Roo Code
+
+1. **Copy the Configuration File**: Copy the `.roomodes` file from this repository to the root of your project directory.
+
+2. **Verify Mode Registration**: Roo Code will automatically detect and load the custom modes defined in the `.roomodes` file when you open your project.
+
+3. **Access the Modes**: In your Roo Code interface:
+   - Look for the custom mode selector or dropdown
+   - You should see the four kodik modes available:
+     - `kodik-spec` - Specification writing mode
+     - `kodik-design` - Technical design mode  
+     - `kodik-tasks` - Task breakdown mode
+     - `kodik-agent` - Agent execution mode
+
+4. **Mode Usage**: Use the modes with the `/` prefix followed by the mode slug:
+   - `/kodik-spec` for specification writing
+   - `/kodik-design` for technical design
+   - `/kodik-tasks` for task breakdown
+   - `/kodik-agent` for automated implementation
+
 ### Best Prompts for Each Mode
 
-#### 📝 Spec Mode (`@kodik-spec`)
+#### 📝 Spec Mode (`kodik spec` in GitHub Copilot / `/kodik-spec` in Roo Coder)
 **Best for:** Initial feature requirements and user story creation
 
 **Example Prompts:**
@@ -119,7 +146,7 @@ Each provider will have its own directory structure following the same conceptua
 - Include any business rules or constraints
 - Don't worry about technical details - focus on what the feature should do
 
-#### 🏗️ Design Mode (`@kodik-design`)
+#### 🏗️ Design Mode (`kodik design` in GitHub Copilot / `/kodik-design` in Roo Coder)
 **Best for:** Creating technical architecture from existing specs
 
 **Example Prompts:**
@@ -133,7 +160,7 @@ Each provider will have its own directory structure following the same conceptua
 - Include any architectural constraints or preferences
 - The mode will analyze your existing codebase automatically
 
-#### ✅ Tasks Mode (`@kodik-tasks`)
+#### ✅ Tasks Mode (`kodik tasks` in GitHub Copilot / `/kodik-tasks` in Roo Coder)
 **Best for:** Breaking down designs into actionable tasks
 
 **Example Prompts:**
@@ -147,7 +174,7 @@ Each provider will have its own directory structure following the same conceptua
 - Tasks will be ordered with dependencies and validation criteria
 - Be specific about the feature name - it should match your spec/design files
 
-#### 🤖 Agent Mode (`@kodik-agent`)
+#### 🤖 Agent Mode (`kodik agent` in GitHub Copilot / `/kodik-agent` in Roo Coder)
 **Best for:** Automated implementation execution
 
 **Example Prompts:**
