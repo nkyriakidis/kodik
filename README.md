@@ -1,5 +1,5 @@
 # kodik
-An open source implementation of the Amazon Kiro Agent modes written by Nik.
+An implementation of the Amazon Kiro Agent modes written by Nik.
 
 **k**iro **o**pen source**d** by n**ik**
 
