@@ -1,86 +1,73 @@
 # kodik
-An implementation of the Amazon Kiro Agent modes written by Nik.
+An open-source implementation of the Amazon Kiro Agent modes, designed and maintained by Nik Kyriakidis.
 
 **k**iro **o**pen source**d** by n**ik**
 
-Currently this repo plays host to some Copilot Agent modes definitions that allows you to replicate the spec driven development behaviour of Kiro.dev using github copilot, these could be easily ported to Roo Code or OpenCode (i plan to later)
+`kodik` provides a structured, specification-driven development workflow through specialized agent modes. It enables you to replicate the spec-driven development behavior of Kiro.dev using GitHub Copilot, and is designed for easy porting to other platforms such as Roo Code or OpenCode.
 
-## Modes
+## About The Project
 
-kodik implements a structured, specification-driven development workflow through four specialized agent modes. Each mode handles a specific phase of the software development lifecycle, from initial specification to final implementation.
+`kodik` is a meta-tooling repository that defines agent modes for a highly organized, spec-driven software development lifecycle. Each mode is responsible for a distinct phase, from initial specification to final implementation, ensuring clarity, traceability, and automation throughout the process.
 
-### 📝 Spec Mode (`spec.chatmode.md`)
-**Purpose:** Creates comprehensive specification documents with user stories and Cucumber notation.
+## Key Features
 
-The Spec Mode agent analyzes user requests and workspace context to generate detailed `.spec.md` files containing:
-- Comprehensive feature descriptions
-- User stories from an end-user perspective
-- Cucumber scenarios using Given-When-Then syntax
-- Behavior-driven development (BDD) specifications
+- Specification-driven workflow for software projects
+- Four specialized agent modes: Spec, Design, Tasks, Agent
+- Markdown-based planning and execution documents
+- Behavior-driven development (BDD) with Cucumber notation
+- Automated, sequential task execution
+- Easily extensible and portable to other agent platforms
 
-**Location:** `.github/chatmodes/spec.chatmode.md`
+## Built With
 
-### 🏗️ Design Mode (`design.chatmode.md`)
-**Purpose:** Translates specifications into detailed technical design documents.
+- Markdown
+- GitHub Copilot & Roo Code (for agent execution)
+- [Kiro.dev](https://kiro.dev) (conceptual inspiration)
 
-The Design Mode agent takes specification files and creates comprehensive technical blueprints that include:
-- Component breakdown and architecture decisions
-- ASCII art UI/UX wireframes and component hierarchies
-- Data flow diagrams showing system interactions
-- API endpoint specifications
-- Database schema changes
-- Detailed implementation guidance
+## Getting Started
 
-**Location:** `.github/chatmodes/design.chatmode.md`
+This repository does not contain executable code or dependencies. It provides agent mode definitions and workflow documentation for use with compatible agent platforms (e.g., GitHub Copilot, Roo Code, OpenCode).
 
-### ✅ Tasks Mode (`tasks.chatmode.md`)
-**Purpose:** Generates granular, executable task lists from spec and design documents.
+### Prerequisites
 
-The Tasks Mode agent breaks down technical designs into atomic, step-by-step implementation tasks:
-- Highly granular task decomposition
-- Clear dependencies between tasks
-- Validation criteria for each task
-- Status tracking (Pending/In Progress/Complete)
-- Structured task lists saved to `.kodik` directory
+- A compatible agent platform (such as GitHub Copilot)
+- Basic knowledge of Markdown and Git
 
-**Location:** `.github/chatmodes/tasks.chatmode.md`
+### Installation
 
-### 🤖 Agent Mode (`agent.chatmode.md`)
-**Purpose:** Executes development tasks by strictly following predefined task lists.
+1. Clone the repo:
+   ```sh
+   git clone https://github.com/nkyriakidis/kodik.git
+   ```
+2. Navigate to the project directory:
+   ```sh
+   cd kodik
+   ```
+3. Review the agent mode definitions in `.github/chatmodes/`
 
-The Agent Mode is the implementation executor that:
-- Follows task lists sequentially without deviation
-- Updates task status as work progresses
-- Performs self-validation against defined criteria
-- Ensures strict adherence to specifications and design
-- Provides automated development execution
+## Usage
 
-**Location:** `.github/chatmodes/agent.chatmode.md`
+To use the `kodik` agent modes:
+
+1. Copy or reference the desired `.chatmode.md` files from `.github/chatmodes/` in your agent platform.
+2. Follow the instructions in each mode file to implement the corresponding phase of your development workflow:
+   - **Spec Mode:** Generate specification documents with user stories and Cucumber scenarios.
+   - **Design Mode:** Create detailed technical design documents from specs.
+   - **Tasks Mode:** Break down designs into granular, executable tasks.
+   - **Agent Mode:** Execute tasks sequentially, updating status and validating completion.
+
+See the documentation in each `.chatmode.md` file for detailed operational instructions.
 
 ## Supported Providers
 
 ### GitHub Copilot
-kodik supports **GitHub Copilot** as an AI provider through custom chat modes (`.chatmode.md` files) located in the `.github/chatmodes/` directory.
-
-**Provider Files:**
-- `.github/chatmodes/agent.chatmode.md` - Agent execution mode
-- `.github/chatmodes/design.chatmode.md` - Technical design mode  
-- `.github/chatmodes/spec.chatmode.md` - Specification writing mode
-- `.github/chatmodes/tasks.chatmode.md` - Task breakdown mode
+`kodik` supports **GitHub Copilot** as an AI provider through custom chat modes (`.chatmode.md` files) located in the `.github/chatmodes/` directory.
 
 ### Roo Code
-kodik also supports **Roo Code** through a comprehensive configuration file that defines all four specialized modes.
-
-**Configuration File:**
-- `.roomodes` - Complete Roo Coder configuration with all four kodik modes (spec, design, tasks, agent)
-
-The `.roomodes` file contains custom mode definitions that replicate the same structured workflow available in GitHub Copilot, allowing teams using Roo Coder to benefit from the complete kodik development methodology.
+`kodik` also supports **Roo Code** through a comprehensive configuration file (`.roomodes`) that defines all four specialized modes.
 
 ### Future Provider Support
-The mode definitions are designed to be easily portable to other AI coding assistants:
-- **OpenCode** (planned)
-
-Each provider follows the same conceptual framework but is adapted to the specific tool's configuration format and capabilities.
+The mode definitions are designed to be easily portable to other AI coding assistants, such as **OpenCode** (planned).
 
 ## How to Use This
 
@@ -91,9 +78,7 @@ Each provider follows the same conceptual framework but is adapted to the specif
    - Run the command `Chat: New Mode File`
    - Choose "Workspace" to make the mode available to your project team
    - Enter the mode name (e.g., "kodik-spec", "kodik-design", etc.)
-
 2. **Copy Mode Definitions**: Replace the generated template with the content from the corresponding `.chatmode.md` files in this repository's `.github/chatmodes/` directory.
-
 3. **Default Location**: By default, VS Code stores workspace chat modes in `.github/chatmodes/` directory:
    ```
    your-project/
@@ -104,7 +89,6 @@ Each provider follows the same conceptual framework but is adapted to the specif
            ├── kodik-spec.chatmode.md
            └── kodik-tasks.chatmode.md
    ```
-
 4. **Access the Modes**: In VS Code with GitHub Copilot:
    - Open the Chat view (`⌃⌘I` on Mac, `Ctrl+Alt+I` on Windows/Linux)
    - Use the **chat mode dropdown** at the top of the chat panel
@@ -113,9 +97,7 @@ Each provider follows the same conceptual framework but is adapted to the specif
 ### Setting Up Custom Modes in Roo Code
 
 1. **Copy the Configuration File**: Copy the `.roomodes` file from this repository to the root of your project directory.
-
 2. **Verify Mode Registration**: Roo Code will automatically detect and load the custom modes defined in the `.roomodes` file when you open your project.
-
 3. **Access the Modes**: In your Roo Code interface:
    - Look for the custom mode selector or dropdown
    - You should see the four kodik modes available:
@@ -123,7 +105,6 @@ Each provider follows the same conceptual framework but is adapted to the specif
      - `kodik-design` - Technical design mode  
      - `kodik-tasks` - Task breakdown mode
      - `kodik-agent` - Agent execution mode
-
 4. **Mode Usage**: Use the modes with the `/` prefix followed by the mode slug:
    - `/kodik-spec` for specification writing
    - `/kodik-design` for technical design
@@ -196,3 +177,17 @@ Each provider follows the same conceptual framework but is adapted to the specif
 4. **Execute with Agent Mode** → Let the agent implement it automatically
 
 This creates a complete spec-driven development cycle that ensures thorough planning before implementation.
+
+## Running Tests
+
+This repository does not contain code or automated tests.
+
+## Contributing
+
+Contributions are welcome! If you have suggestions for new agent modes, improvements, or documentation, please open an issue or submit a pull request.
+
+> **Note:** No `CONTRIBUTING.md` file exists yet. Please follow standard GitHub contribution practices.
+
+## License
+
+Distributed under the MIT License. See `LICENSE.md` for more information.
