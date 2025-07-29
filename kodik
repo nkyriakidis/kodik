@@ -292,12 +292,53 @@ detect_modifications() {
             return 2  # No installation to check
         fi
         
-        # Generate current checksum for roomodes file
+        # Generate current checksum for kodik modes in roomodes file
         current_checksums_file="$temp_checksums_dir/current_roomodes_checksum"
         stored_checksums_file="$STATE_DIR/checksums/roomodes_checksum"
         
-        if ! sha256sum "$REPO_ROOT/.roomodes" > "$current_checksums_file" 2>/dev/null; then
-            echo "Error: Failed to generate current checksum for roomodes file." >&2
+        # Extract only kodik modes and generate checksum
+        local temp_current_kodik_content="$temp_checksums_dir/current_kodik_content"
+        
+        # Extract only kodik modes from current roomodes file
+        awk '
+        BEGIN { in_custom_modes = 0; in_mode = 0; current_mode = ""; is_kodik_mode = 0 }
+        /^customModes:/ { in_custom_modes = 1; next }
+        /^[a-zA-Z][^:]*:/ && !/^  / { 
+            # New top-level section - end of customModes
+            if (in_custom_modes) {
+                # Output current mode if it is kodik
+                if (in_mode && is_kodik_mode && current_mode != "") {
+                    print current_mode
+                }
+                exit
+            }
+        }
+        in_custom_modes {
+            if (/^  - slug: /) {
+                # Output previous mode if it is kodik
+                if (in_mode && is_kodik_mode && current_mode != "") {
+                    print current_mode
+                }
+                # Start new mode
+                current_mode = $0
+                in_mode = 1
+                # Check if this is a kodik mode
+                is_kodik_mode = ($0 ~ /slug: kodik-/)
+            } else if (in_mode) {
+                # Continue building current mode
+                current_mode = current_mode "\n" $0
+            }
+        }
+        END {
+            # Output final mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+        }
+        ' "$REPO_ROOT/.roomodes" > "$temp_current_kodik_content"
+        
+        if ! sha256sum "$temp_current_kodik_content" > "$current_checksums_file" 2>/dev/null; then
+            echo "Error: Failed to generate current checksum for kodik modes in roomodes file." >&2
             rm -rf "$temp_checksums_dir"
             return 1
         fi
@@ -578,6 +619,171 @@ format_size() {
         local gb=$((size / 1073741824))
         echo "${gb} GB"
     fi
+}
+
+# Merge .roomodes files - preserve user modes, update kodik modes
+merge_roomodes_files() {
+    local existing_roomodes="$1"
+    local new_roomodes="$2"
+    local output_roomodes="$3"
+    
+    # Validate parameters
+    if [ -z "$existing_roomodes" ] || [ -z "$new_roomodes" ] || [ -z "$output_roomodes" ]; then
+        echo "Error: merge_roomodes_files requires existing_roomodes, new_roomodes, and output_roomodes parameters." >&2
+        return 1
+    fi
+    
+    echo "Merging .roomodes files: preserving user modes, updating kodik modes..."
+    
+    # If no existing file, just copy the new one
+    if [ ! -f "$existing_roomodes" ]; then
+        echo "No existing .roomodes file found. Using new file as-is."
+        cp "$new_roomodes" "$output_roomodes"
+        return 0
+    fi
+    
+    # Create temporary directory for processing
+    local temp_merge_dir
+    if ! temp_merge_dir=$(mktemp -d); then
+        echo "Error: Failed to create temporary directory for roomodes merge." >&2
+        return 1
+    fi
+    
+    # Track temp directory for cleanup
+    TEMP_FILES+=("$temp_merge_dir")
+    
+    local header_file="$temp_merge_dir/header.yaml"
+    local user_modes_file="$temp_merge_dir/user_modes.yaml"
+    local kodik_modes_file="$temp_merge_dir/kodik_modes.yaml"
+    local footer_file="$temp_merge_dir/footer.yaml"
+    
+    # Extract header (everything before customModes:)
+    echo "Extracting file header..."
+    sed '/^customModes:/,$d' "$existing_roomodes" > "$header_file"
+    
+    # Extract user modes (modes that don't start with kodik-)
+    echo "Extracting existing user modes..."
+    awk '
+    BEGIN { in_custom_modes = 0; in_mode = 0; current_mode = ""; skip_mode = 0 }
+    /^customModes:/ { in_custom_modes = 1; next }
+    /^[a-zA-Z][^:]*:/ && !/^  / { 
+        # New top-level section - end of customModes
+        if (in_custom_modes) {
+            # Output current mode if it should be kept
+            if (in_mode && !skip_mode && current_mode != "") {
+                print current_mode
+            }
+            exit
+        }
+    }
+    in_custom_modes {
+        if (/^  - slug: /) {
+            # Output previous mode if it should be kept
+            if (in_mode && !skip_mode && current_mode != "") {
+                print current_mode
+            }
+            # Start new mode
+            current_mode = $0
+            in_mode = 1
+            # Check if this is a kodik mode
+            skip_mode = ($0 ~ /slug: kodik-/)
+        } else if (in_mode) {
+            # Continue building current mode
+            current_mode = current_mode "\n" $0
+        }
+    }
+    END {
+        # Output final mode if it should be kept
+        if (in_mode && !skip_mode && current_mode != "") {
+            print current_mode
+        }
+    }
+    ' "$existing_roomodes" > "$user_modes_file"
+    
+    # Extract kodik modes from new file
+    echo "Extracting kodik modes from new file..."
+    awk '
+    BEGIN { in_custom_modes = 0; in_mode = 0; current_mode = ""; is_kodik_mode = 0 }
+    /^customModes:/ { in_custom_modes = 1; next }
+    /^[a-zA-Z][^:]*:/ && !/^  / { 
+        # New top-level section - end of customModes
+        if (in_custom_modes) {
+            # Output current mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+            exit
+        }
+    }
+    in_custom_modes {
+        if (/^  - slug: /) {
+            # Output previous mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+            # Start new mode
+            current_mode = $0
+            in_mode = 1
+            # Check if this is a kodik mode
+            is_kodik_mode = ($0 ~ /slug: kodik-/)
+        } else if (in_mode) {
+            # Continue building current mode
+            current_mode = current_mode "\n" $0
+        }
+    }
+    END {
+        # Output final mode if it is kodik
+        if (in_mode && is_kodik_mode && current_mode != "") {
+            print current_mode
+        }
+    }
+    ' "$new_roomodes" > "$kodik_modes_file"
+    
+    # Extract footer (everything after customModes section)
+    echo "Extracting file footer..."
+    awk '
+    BEGIN { in_custom_modes = 0; past_custom_modes = 0 }
+    /^customModes:/ { in_custom_modes = 1; next }
+    /^[a-zA-Z][^:]*:/ && !/^  / && in_custom_modes { 
+        # New top-level section - end of customModes
+        past_custom_modes = 1
+        print $0
+        next
+    }
+    past_custom_modes { print $0 }
+    ' "$existing_roomodes" > "$footer_file"
+    
+    # Assemble merged file
+    echo "Assembling merged .roomodes file..."
+    
+    # Start with header
+    cat "$header_file" > "$output_roomodes"
+    
+    # Add customModes section
+    echo "customModes:" >> "$output_roomodes"
+    
+    # Add user modes
+    if [ -s "$user_modes_file" ]; then
+        cat "$user_modes_file" >> "$output_roomodes"
+    fi
+    
+    # Add kodik modes  
+    if [ -s "$kodik_modes_file" ]; then
+        cat "$kodik_modes_file" >> "$output_roomodes"
+    fi
+    
+    # Add footer
+    if [ -s "$footer_file" ]; then
+        cat "$footer_file" >> "$output_roomodes"
+    fi
+    
+    echo "Successfully merged .roomodes files:"
+    local user_mode_count=$(grep -c "^  - slug:" "$user_modes_file" 2>/dev/null || echo "0")
+    local kodik_mode_count=$(grep -c "^  - slug:" "$kodik_modes_file" 2>/dev/null || echo "0") 
+    echo "  - Preserved $user_mode_count existing user modes"
+    echo "  - Added/updated $kodik_mode_count kodik modes"
+    
+    return 0
 }
 
 # Download and validate components from GitHub repository
@@ -923,12 +1129,24 @@ atomic_install() {
         fi
         
     elif [ "$component_type" = "roo" ]; then
-        # Move roomodes file from staging
-        if mv "$staging_dir/.roomodes" "$REPO_ROOT/.roomodes"; then
-            echo "Roo component moved to final location successfully."
-            move_success=true
+        # Merge roomodes file from staging with existing file (preserving user modes)
+        local existing_roomodes="$REPO_ROOT/.roomodes"
+        local staging_roomodes="$staging_dir/.roomodes"
+        local temp_merged_roomodes="$staging_dir/.roomodes.merged"
+        
+        echo "Merging roomodes configuration (preserving existing user modes)..."
+        
+        # Perform merge operation
+        if merge_roomodes_files "$existing_roomodes" "$staging_roomodes" "$temp_merged_roomodes"; then
+            # Move merged file to final location
+            if mv "$temp_merged_roomodes" "$REPO_ROOT/.roomodes"; then
+                echo "Roo component merged and installed successfully."
+                move_success=true
+            else
+                echo "Error: Failed to move merged roomodes file to final location." >&2
+            fi
         else
-            echo "Error: Failed to move roo component from staging." >&2
+            echo "Error: Failed to merge roomodes files." >&2
         fi
     fi
     
@@ -1060,7 +1278,7 @@ generate_github_checksums() {
     fi
 }
 
-# Generate checksum for roomodes file
+# Generate checksum for kodik modes in roomodes file
 generate_roomodes_checksum() {
     local roomodes_file="${1:-$REPO_ROOT/.roomodes}"
     local output_file="$STATE_DIR/checksums/roomodes_checksum"
@@ -1071,7 +1289,7 @@ generate_roomodes_checksum() {
         return 1
     fi
     
-    echo "Generating checksum for roomodes file: $roomodes_file"
+    echo "Generating checksums for kodik modes in roomodes file: $roomodes_file"
     
     # Create checksums directory if it doesn't exist
     if ! mkdir -p "$STATE_DIR/checksums"; then
@@ -1079,13 +1297,62 @@ generate_roomodes_checksum() {
         return 1
     fi
     
-    # Generate SHA256 checksum for .roomodes file
-    if sha256sum "$roomodes_file" > "$output_file" 2>/dev/null; then
-        echo "Generated checksum for roomodes file."
-        echo "Checksum stored in: $output_file"
+    # Create temporary file for kodik-only content
+    local temp_kodik_content
+    if ! temp_kodik_content=$(mktemp); then
+        echo "Error: Failed to create temporary file for kodik content." >&2
+        return 1
+    fi
+    
+    # Track temp file for cleanup
+    TEMP_FILES+=("$temp_kodik_content")
+    
+    # Extract only kodik modes from roomodes file
+    awk '
+    BEGIN { in_custom_modes = 0; in_mode = 0; current_mode = ""; is_kodik_mode = 0 }
+    /^customModes:/ { in_custom_modes = 1; next }
+    /^[a-zA-Z][^:]*:/ && !/^  / { 
+        # New top-level section - end of customModes
+        if (in_custom_modes) {
+            # Output current mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+            exit
+        }
+    }
+    in_custom_modes {
+        if (/^  - slug: /) {
+            # Output previous mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+            # Start new mode
+            current_mode = $0
+            in_mode = 1
+            # Check if this is a kodik mode
+            is_kodik_mode = ($0 ~ /slug: kodik-/)
+        } else if (in_mode) {
+            # Continue building current mode
+            current_mode = current_mode "\n" $0
+        }
+    }
+    END {
+        # Output final mode if it is kodik
+        if (in_mode && is_kodik_mode && current_mode != "") {
+            print current_mode
+        }
+    }
+    ' "$roomodes_file" > "$temp_kodik_content"
+    
+    # Generate SHA256 checksum for kodik-only content
+    if sha256sum "$temp_kodik_content" > "$output_file" 2>/dev/null; then
+        local mode_count=$(grep -c "^  - slug:" "$temp_kodik_content" 2>/dev/null || echo "0")
+        echo "Generated checksums for $mode_count kodik modes in roomodes file."
+        echo "Checksums stored in: $output_file"
         return 0
     else
-        echo "Error: Failed to generate checksum for roomodes file." >&2
+        echo "Error: Failed to generate checksum for kodik modes in roomodes file." >&2
         return 1
     fi
 }
@@ -1201,15 +1468,64 @@ update_installation_history() {
             mv "$install_history.tmp" "$install_history"
         fi
         
-        # Generate SHA256 hash for .roomodes file
-        local file_hash=$(sha256sum "$REPO_ROOT/.roomodes" 2>/dev/null | cut -d' ' -f1)
+        # Create temporary file for kodik-only content
+        local temp_kodik_content
+        if ! temp_kodik_content=$(mktemp); then
+            echo "Error: Failed to create temporary file for kodik content tracking." >&2
+            return 1
+        fi
+        
+        # Track temp file for cleanup
+        TEMP_FILES+=("$temp_kodik_content")
+        
+        # Extract only kodik modes from roomodes file for tracking
+        awk '
+        BEGIN { in_custom_modes = 0; in_mode = 0; current_mode = ""; is_kodik_mode = 0 }
+        /^customModes:/ { in_custom_modes = 1; next }
+        /^[a-zA-Z][^:]*:/ && !/^  / { 
+            # New top-level section - end of customModes
+            if (in_custom_modes) {
+                # Output current mode if it is kodik
+                if (in_mode && is_kodik_mode && current_mode != "") {
+                    print current_mode
+                }
+                exit
+            }
+        }
+        in_custom_modes {
+            if (/^  - slug: /) {
+                # Output previous mode if it is kodik
+                if (in_mode && is_kodik_mode && current_mode != "") {
+                    print current_mode
+                }
+                # Start new mode
+                current_mode = $0
+                in_mode = 1
+                # Check if this is a kodik mode
+                is_kodik_mode = ($0 ~ /slug: kodik-/)
+            } else if (in_mode) {
+                # Continue building current mode
+                current_mode = current_mode "\n" $0
+            }
+        }
+        END {
+            # Output final mode if it is kodik
+            if (in_mode && is_kodik_mode && current_mode != "") {
+                print current_mode
+            }
+        }
+        ' "$REPO_ROOT/.roomodes" > "$temp_kodik_content"
+        
+        # Generate SHA256 hash for kodik-only content
+        local file_hash=$(sha256sum "$temp_kodik_content" 2>/dev/null | cut -d' ' -f1)
         
         if [ -n "$file_hash" ]; then
+            local mode_count=$(grep -c "^  - slug:" "$temp_kodik_content" 2>/dev/null || echo "0")
             # Format: component_type:file_path:sha256_hash:install_timestamp
             echo "roo:.roomodes:$file_hash:$install_timestamp" >> "$install_history"
-            echo "Updated installation history for roo component."
+            echo "Updated installation history for roo component ($mode_count kodik modes)."
         else
-            echo "Error: Failed to generate hash for .roomodes file." >&2
+            echo "Error: Failed to generate hash for kodik modes in .roomodes file." >&2
             return 1
         fi
     fi
