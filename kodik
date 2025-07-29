@@ -1,0 +1,1507 @@
+#!/bin/bash
+
+# install_update.sh - kodik Install and Update Script
+# 
+# This script automates the installation and updating of kodik repository configurations.
+# It manages two critical components:
+# - .github/ directory (containing chatmode definitions and prompts)  
+# - .roomodes file (containing Roo Code configuration)
+#
+# Usage: install_update.sh [OPTIONS] [MODE]
+#
+# OPTIONS:
+#   -h, --help      Show usage information
+#   -f, --force     Skip backups and confirmations
+#   -d, --dry-run   Preview actions without execution
+#
+# MODE:
+#   --github, -g    Install/update only .github directory
+#   --roo, -r       Install/update only .roomodes file
+#   (no mode)       Install/update both components (default)
+
+# Script exit immediately if a command exits with a non-zero status
+set -e
+
+# Error codes for different failure categories
+ERROR_NETWORK=1      # Download failures, timeouts
+ERROR_CHECKSUM=2     # Downloaded file validation failures  
+ERROR_FILESYSTEM=3   # Permission errors, disk space
+ERROR_USER=4         # User cancellation, invalid input
+ERROR_SYSTEM=5       # Missing dependencies, system failures
+
+# Initialize global variables
+SCRIPT_NAME="$(basename "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Temporary files cleanup tracking
+TEMP_FILES=()
+BACKUP_CREATED=""
+
+# Cleanup function for error handling
+cleanup_on_error() {
+    local exit_code=$1
+    
+    if [ $exit_code -ne 0 ]; then
+        echo "Error detected (exit code: $exit_code). Performing cleanup..." >&2
+        
+        # Clean up temporary files
+        cleanup_temp_files
+        
+        # Restore from backup if one was created
+        if [ -n "$BACKUP_CREATED" ] && [ -e "$BACKUP_CREATED" ]; then
+            echo "Attempting to restore from backup: $BACKUP_CREATED" >&2
+            # Note: Full restore implementation will be in later tasks
+        fi
+        
+        echo "Cleanup completed." >&2
+    fi
+}
+
+# Clean up temporary files
+cleanup_temp_files() {
+    echo "Cleaning up temporary files..."
+    
+    for temp_file in "${TEMP_FILES[@]}"; do
+        if [ -e "$temp_file" ]; then
+            echo "Removing temporary file/directory: $temp_file"
+            rm -rf "$temp_file" 2>/dev/null || {
+                echo "Warning: Could not remove temporary file: $temp_file" >&2
+            }
+        fi
+    done
+    
+    # Clear the array
+    TEMP_FILES=()
+    
+    # Clean up temp directory if it exists in STATE_DIR
+    if [ -n "$STATE_DIR" ] && [ -d "$STATE_DIR/temp" ]; then
+        echo "Cleaning up temp directory: $STATE_DIR/temp"
+        rm -rf "$STATE_DIR/temp"/* 2>/dev/null || true
+    fi
+}
+
+# Set up error handling trap
+trap 'cleanup_on_error $?' EXIT
+
+# Command line option variables
+help=false
+force=false
+dry_run=false
+github_mode=false
+roo_mode=false
+
+# Check script compatibility and required utilities
+check_compatibility() {
+    echo "Checking system compatibility..."
+    
+    # Check bash version (we support 3.2+ but warn about features)
+    local bash_version=$(bash --version | head -1 | sed 's/.*version \([0-9]*\.[0-9]*\).*/\1/')
+    local bash_major=$(echo "$bash_version" | cut -d'.' -f1)
+    local bash_minor=$(echo "$bash_version" | cut -d'.' -f2)
+    
+    echo "Detected Bash version: $bash_version"
+    
+    if [ "$bash_major" -lt 3 ] || ([ "$bash_major" -eq 3 ] && [ "$bash_minor" -lt 2 ]); then
+        echo "ERROR: This script requires Bash 3.2 or higher." >&2
+        echo "Current version: $bash_version" >&2
+        return $ERROR_SYSTEM
+    fi
+    
+    if [ "$bash_major" -eq 3 ]; then
+        echo "Note: Bash 3.x detected. Script designed to be compatible with Bash 3.2+."
+    fi
+    
+    # Check for required system utilities
+    local required_utilities=(
+        "curl:Network operations"
+        "tar:Archive extraction"
+        "gzip:Archive decompression"
+        "sha256sum:File integrity verification"
+        "mktemp:Temporary file operations"
+        "git:Repository detection"
+        "find:File operations"
+        "wc:Text processing"
+        "cut:Text processing"
+        "date:Timestamp generation"
+    )
+    
+    local missing_utilities=()
+    
+    for utility_info in "${required_utilities[@]}"; do
+        local utility=$(echo "$utility_info" | cut -d':' -f1)
+        local description=$(echo "$utility_info" | cut -d':' -f2)
+        
+        if ! command -v "$utility" >/dev/null 2>&1; then
+            missing_utilities+=("$utility ($description)")
+            echo "✗ Missing required utility: $utility" >&2
+        else
+            echo "✓ Found required utility: $utility"
+        fi
+    done
+    
+    # Check for optional utilities with fallbacks
+    if ! command -v "wget" >/dev/null 2>&1; then
+        echo "Note: wget not found, using curl for downloads (this is fine)"
+    else
+        echo "✓ Found optional utility: wget"
+    fi
+    
+    # Report missing utilities
+    if [ ${#missing_utilities[@]} -gt 0 ]; then
+        echo "" >&2
+        echo "ERROR: Missing required utilities:" >&2
+        for missing in "${missing_utilities[@]}"; do
+            echo "  - $missing" >&2
+        done
+        echo "" >&2
+        echo "Please install the missing utilities and try again." >&2
+        return $ERROR_SYSTEM
+    fi
+    
+    echo "✓ All required utilities are available"
+    echo "System compatibility check passed."
+    return 0
+}
+
+# Detect and set repository root
+detect_repository_root() {
+    local repo_root
+    
+    # Try to get repository root using git
+    if repo_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+        REPO_ROOT="$repo_root"
+        echo "Repository root detected: $REPO_ROOT"
+        return 0
+    else
+        echo "Error: This script must be run from within a git repository." >&2
+        echo "Please navigate to your repository directory and try again." >&2
+        exit 1
+    fi
+}
+
+# Repository root variable (set by detect_repository_root)
+REPO_ROOT=""
+
+# Initialize state directory structure
+initialize_state_directory() {
+    # Allow override via environment variable
+    local state_dir="${KODIK_STATE_DIR:-$REPO_ROOT/.kodik-state}"
+    
+    echo "Initializing state directory: $state_dir"
+    
+    # Create main state directory
+    if [ ! -d "$state_dir" ]; then
+        mkdir -p "$state_dir"
+        echo "Created state directory: $state_dir"
+    fi
+    
+    # Create required subdirectories
+    local subdirs="checksums backups temp"
+    for subdir in $subdirs; do
+        local full_path="$state_dir/$subdir"
+        if [ ! -d "$full_path" ]; then
+            mkdir -p "$full_path"
+            echo "Created subdirectory: $full_path"
+        fi
+    done
+    
+    # Set global variable for use throughout script
+    STATE_DIR="$state_dir"
+    echo "State directory initialization complete: $STATE_DIR"
+}
+
+# State directory variable (set by initialize_state_directory)
+STATE_DIR=""
+
+# Download source URLs (with environment variable overrides)
+GITHUB_ARCHIVE_URL="${KODIK_GITHUB_URL:-https://github.com/nkyriakidis/kodik/archive/refs/heads/main.tar.gz}"
+ROOMODES_RAW_URL="${KODIK_ROOMODES_URL:-https://raw.githubusercontent.com/nkyriakidis/kodik/main/.roomodes}"
+
+# Detect modifications by comparing current files with installation records
+detect_modifications() {
+    local component_type="$1"
+    local install_history="$STATE_DIR/install_history"
+    
+    # Validate component type parameter
+    if [ "$component_type" != "github" ] && [ "$component_type" != "roo" ]; then
+        echo "Error: Invalid component type '$component_type'. Must be 'github' or 'roo'." >&2
+        return 1
+    fi
+    
+    echo "Checking for modifications in $component_type component..."
+    
+    # Generate current checksums for comparison
+    local temp_checksums_dir="$STATE_DIR/temp/detect_modifications_$$"
+    mkdir -p "$temp_checksums_dir" || {
+        echo "Error: Failed to create temporary checksums directory." >&2
+        return 1
+    }
+    
+    local current_checksums_file=""
+    local stored_checksums_file=""
+    
+    if [ "$component_type" = "github" ]; then
+        # Check if .github directory exists
+        if [ ! -d "$REPO_ROOT/.github" ]; then
+            echo "GitHub directory not found. Component may not be installed."
+            rm -rf "$temp_checksums_dir"
+            return 2  # No installation to check
+        fi
+        
+        # Generate current checksums for GitHub directory
+        current_checksums_file="$temp_checksums_dir/current_github_checksums"
+        stored_checksums_file="$STATE_DIR/checksums/github_checksums"
+        
+        if ! find "$REPO_ROOT/.github" -type f -exec sha256sum {} \; > "$current_checksums_file" 2>/dev/null; then
+            echo "Error: Failed to generate current checksums for GitHub directory." >&2
+            rm -rf "$temp_checksums_dir"
+            return 1
+        fi
+        
+    elif [ "$component_type" = "roo" ]; then
+        # Check if .roomodes file exists
+        if [ ! -f "$REPO_ROOT/.roomodes" ]; then
+            echo "Roomodes file not found. Component may not be installed."
+            rm -rf "$temp_checksums_dir"
+            return 2  # No installation to check
+        fi
+        
+        # Generate current checksum for roomodes file
+        current_checksums_file="$temp_checksums_dir/current_roomodes_checksum"
+        stored_checksums_file="$STATE_DIR/checksums/roomodes_checksum"
+        
+        if ! sha256sum "$REPO_ROOT/.roomodes" > "$current_checksums_file" 2>/dev/null; then
+            echo "Error: Failed to generate current checksum for roomodes file." >&2
+            rm -rf "$temp_checksums_dir"
+            return 1
+        fi
+    fi
+    
+    # Check if stored checksums exist
+    if [ ! -f "$stored_checksums_file" ]; then
+        echo "No stored checksums found for $component_type component."
+        rm -rf "$temp_checksums_dir"
+        return 2  # No history
+    fi
+    
+    # Compare current checksums with stored checksums
+    echo "Comparing current checksums with stored checksums..."
+    
+    # Create sorted versions for reliable comparison
+    local current_sorted="$temp_checksums_dir/current_sorted"
+    local stored_sorted="$temp_checksums_dir/stored_sorted"
+    
+    # Sort by filename for consistent comparison
+    sort "$current_checksums_file" > "$current_sorted"
+    sort "$stored_checksums_file" > "$stored_sorted"
+    
+    # Compare sorted checksum files
+    if ! diff -q "$current_sorted" "$stored_sorted" >/dev/null 2>&1; then
+        echo "Modifications detected in $component_type component:"
+        
+        # Show detailed differences
+        echo "Files with checksum differences:"
+        while IFS= read -r line; do
+            if [[ "$line" == "< "* ]]; then
+                # Current file (different from stored)
+                local current_entry="${line#< }"
+                local current_hash="${current_entry%% *}"
+                local current_file="${current_entry#* }"
+                echo "  Modified: ${current_file##*/} (current: ${current_hash:0:12}...)"
+            elif [[ "$line" == "> "* ]]; then
+                # Stored file (not in current)
+                local stored_entry="${line#> }"
+                local stored_hash="${stored_entry%% *}"
+                local stored_file="${stored_entry#* }"
+                echo "  Missing:  ${stored_file##*/} (expected: ${stored_hash:0:12}...)"
+            fi
+        done < <(diff "$current_sorted" "$stored_sorted" 2>/dev/null || true)
+        
+        rm -rf "$temp_checksums_dir"
+        return 1  # Modified
+    fi
+    
+    echo "No modifications detected for $component_type component."
+    rm -rf "$temp_checksums_dir"
+    return 0  # No modifications
+}
+
+# Create timestamped backups of existing files/directories
+backup_existing() {
+    local component_type="$1"
+    local source_path="$2"
+    
+    # Validate parameters
+    if [ -z "$component_type" ] || [ -z "$source_path" ]; then
+        echo "Error: backup_existing requires component_type and source_path parameters." >&2
+        return 1
+    fi
+    
+    # Validate component type
+    if [ "$component_type" != "github" ] && [ "$component_type" != "roo" ]; then
+        echo "Error: Invalid component type '$component_type'. Must be 'github' or 'roo'." >&2
+        return 1
+    fi
+    
+    # Check if source exists
+    if [ ! -e "$source_path" ]; then
+        echo "Source path does not exist: $source_path"
+        return 1
+    fi
+    
+    # Generate timestamp in YYYY-MM-DD_HH-MM-SS format
+    local timestamp=$(date '+%Y-%m-%d_%H-%M-%S')
+    local unix_timestamp=$(date +%s)
+    
+    # Create backup directory path
+    local backup_name="${timestamp}_${component_type}"
+    local backup_path="$STATE_DIR/backups/$backup_name"
+    
+    echo "Creating backup: $source_path -> $backup_path" >&2
+    
+    # Create backup based on source type
+    local backup_success=false
+    local restore_command=""
+    
+    if [ -d "$source_path" ]; then
+        # Directory backup - use cp -r
+        if cp -r "$source_path" "$backup_path" 2>/dev/null; then
+            echo "Directory backup created: $backup_path" >&2
+            backup_success=true
+            # Generate restore command for directory
+            restore_command="cp -r $backup_path $source_path"
+        else
+            echo "Error: Failed to create directory backup for $source_path" >&2
+            return 1
+        fi
+    elif [ -f "$source_path" ]; then
+        # File backup - use cp
+        if cp "$source_path" "$backup_path" 2>/dev/null; then
+            echo "File backup created: $backup_path" >&2
+            backup_success=true
+            # Generate restore command for file
+            restore_command="cp $backup_path $source_path"
+        else
+            echo "Error: Failed to create file backup for $source_path" >&2
+            return 1
+        fi
+    else
+        echo "Error: Source path is neither file nor directory: $source_path" >&2
+        return 1
+    fi
+    
+    # Update restoration log with backup metadata
+    if [ "$backup_success" = "true" ]; then
+        local restoration_log="$STATE_DIR/backups/restoration_log.txt"
+        
+        # Create restoration log if it doesn't exist
+        if [ ! -f "$restoration_log" ]; then
+            echo "# Backup Restoration Log" > "$restoration_log"
+            echo "# Format: timestamp|component|original_path|backup_path|restore_command" >> "$restoration_log"
+            echo "# Use the restore_command to restore backed up files/directories" >> "$restoration_log"
+            echo "" >> "$restoration_log"
+        fi
+        
+        # Add backup entry to restoration log
+        # Format: timestamp|component|original_path|backup_path|restore_command
+        echo "$unix_timestamp|$component_type|$source_path|$backup_path|$restore_command" >> "$restoration_log"
+        
+        echo "Backup metadata logged to: $restoration_log" >&2
+    fi
+    
+    # Return the backup path (output to stdout for caller to capture)
+    echo "$backup_path"
+    return 0
+}
+
+# Format file size in human-readable format (KB/MB/GB)
+format_size() {
+    local size="$1"
+    
+    if [ -z "$size" ] || [ "$size" -eq 0 ]; then
+        echo "0 B"
+        return
+    fi
+    
+    # Convert bytes to human-readable format
+    if [ "$size" -lt 1024 ]; then
+        echo "${size} B"
+    elif [ "$size" -lt 1048576 ]; then
+        # Convert to KB (1024 bytes)
+        local kb=$((size / 1024))
+        echo "${kb} KB"
+    elif [ "$size" -lt 1073741824 ]; then
+        # Convert to MB (1024 * 1024 bytes)
+        local mb=$((size / 1048576))
+        echo "${mb} MB"
+    else
+        # Convert to GB (1024 * 1024 * 1024 bytes)
+        local gb=$((size / 1073741824))
+        echo "${gb} GB"
+    fi
+}
+
+# Download and validate components from GitHub repository
+download_component() {
+    local component_type="$1"
+    local destination_path="$2"
+    
+    # Validate parameters
+    if [ -z "$component_type" ] || [ -z "$destination_path" ]; then
+        echo "Error: download_component requires component_type and destination_path parameters." >&2
+        return $ERROR_USER
+    fi
+    
+    # Validate component type
+    if [ "$component_type" != "github" ] && [ "$component_type" != "roo" ]; then
+        echo "Error: Invalid component type '$component_type'. Must be 'github' or 'roo'." >&2
+        return $ERROR_USER
+    fi
+    
+    echo "Downloading $component_type component..."
+    
+    if [ "$component_type" = "github" ]; then
+        # Handle GitHub archive download and extraction
+        local temp_dir
+        if ! temp_dir=$(mktemp -d); then
+            echo "Error: Failed to create temporary directory." >&2
+            return $ERROR_FILESYSTEM
+        fi
+        
+        # Add temp directory to cleanup tracking
+        TEMP_FILES+=("$temp_dir")
+        
+        local archive_file="$temp_dir/kodik-main.tar.gz"
+        
+        echo "Downloading GitHub archive to: $archive_file"
+        
+        # Download with retry logic
+        local retries=3
+        local retry_count=0
+        
+        while [ $retry_count -lt $retries ]; do
+            if curl -L "$GITHUB_ARCHIVE_URL" -o "$archive_file" 2>/dev/null; then
+                echo "Archive downloaded successfully."
+                break
+            else
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $retries ]; then
+                    echo "Download failed, retrying... ($retry_count/$retries)"
+                    sleep 2
+                else
+                    echo "Error: Failed to download GitHub archive after $retries attempts." >&2
+                    return $ERROR_NETWORK
+                fi
+            fi
+        done
+        
+        # Verify archive file exists and has content
+        if [ ! -f "$archive_file" ] || [ ! -s "$archive_file" ]; then
+            echo "Error: Downloaded archive is missing or empty." >&2
+            return $ERROR_NETWORK
+        fi
+        
+        echo "Extracting archive to temporary directory..."
+        
+        # Extract archive to temporary location
+        if ! tar -xzf "$archive_file" -C "$temp_dir" 2>/dev/null; then
+            echo "Error: Failed to extract archive." >&2
+            return $ERROR_CHECKSUM
+        fi
+        
+        # Verify extracted directory structure
+        local github_source="$temp_dir/kodik-main/.github"
+        if [ ! -d "$github_source" ]; then
+            echo "Error: Expected .github directory not found in archive." >&2
+            return $ERROR_CHECKSUM
+        fi
+        
+        echo "Copying .github directory to destination: $destination_path"
+        
+        # Copy only .github directory to destination
+        if ! cp -r "$github_source" "$destination_path/" 2>/dev/null; then
+            echo "Error: Failed to copy .github directory to destination." >&2
+            return $ERROR_FILESYSTEM
+        fi
+        
+        echo "GitHub component downloaded and extracted successfully."
+        
+    elif [ "$component_type" = "roo" ]; then
+        # Handle roomodes raw file download
+        local roomodes_file="$destination_path/.roomodes"
+        
+        echo "Downloading .roomodes file to: $roomodes_file"
+        
+        # Download with retry logic
+        local retries=3
+        local retry_count=0
+        
+        while [ $retry_count -lt $retries ]; do
+            if curl -L "$ROOMODES_RAW_URL" -o "$roomodes_file" 2>/dev/null; then
+                echo "Roomodes file downloaded successfully."
+                break
+            else
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $retries ]; then
+                    echo "Download failed, retrying... ($retry_count/$retries)"
+                    sleep 2
+                else
+                    echo "Error: Failed to download .roomodes file after $retries attempts." >&2
+                    return $ERROR_NETWORK
+                fi
+            fi
+        done
+        
+        # Verify file exists and has content
+        if [ ! -f "$roomodes_file" ] || [ ! -s "$roomodes_file" ]; then
+            echo "Error: Downloaded .roomodes file is missing or empty." >&2
+            return $ERROR_NETWORK
+        fi
+        
+        echo "Roomodes component downloaded successfully."
+    fi
+    
+    return 0
+}
+
+# Validate GitHub repository structure
+validate_github_structure() {
+    local github_dir="$1"
+    
+    # Validate parameter
+    if [ -z "$github_dir" ]; then
+        echo "Error: validate_github_structure requires github_dir parameter." >&2
+        return 1
+    fi
+    
+    # Check if directory exists
+    if [ ! -d "$github_dir" ]; then
+        echo "Error: GitHub directory does not exist: $github_dir" >&2
+        return 1
+    fi
+    
+    echo "Validating GitHub repository structure in: $github_dir"
+    
+    # Required directories and files
+    local required_paths=(
+        "$github_dir/chatmodes"
+        "$github_dir/prompts"
+        "$github_dir/chatmodes/kodik design.chatmode.md"
+    )
+    
+    # Validate each required path
+    for path in "${required_paths[@]}"; do
+        if [ ! -e "$path" ]; then
+            echo "ERROR: Missing required file/directory: $path" >&2
+            return 1
+        fi
+        
+        # Check type and report
+        if [ -d "$path" ]; then
+            echo "✓ Directory found: $path"
+        elif [ -f "$path" ]; then
+            echo "✓ File found: $path"
+        else
+            echo "ERROR: Path exists but is neither file nor directory: $path" >&2
+            return 1
+        fi
+    done
+    
+    echo "GitHub repository structure validation passed."
+    return 0
+}
+
+# Atomic installation with rollback capability
+atomic_install() {
+    local component_type="$1"
+    
+    # Validate parameter
+    if [ -z "$component_type" ]; then
+        echo "Error: atomic_install requires component_type parameter." >&2
+        return 1
+    fi
+    
+    # Validate component type
+    if [ "$component_type" != "github" ] && [ "$component_type" != "roo" ]; then
+        echo "Error: Invalid component type '$component_type'. Must be 'github' or 'roo'." >&2
+        return 1
+    fi
+    
+    echo "Starting atomic installation for $component_type component..."
+    
+    # Create staging directory in .kodik-state/temp/
+    local staging_dir="$STATE_DIR/temp/atomic_install_$(date '+%Y%m%d_%H%M%S')"
+    
+    if ! mkdir -p "$staging_dir"; then
+        echo "Error: Failed to create staging directory: $staging_dir" >&2
+        return 1
+    fi
+    
+    echo "Created staging area: $staging_dir"
+    
+    # Track staging directory for cleanup
+    TEMP_FILES+=("$staging_dir")
+    
+    # Stage 1: Download component to staging area
+    echo "Stage 1: Downloading $component_type component to staging area..."
+    
+    local staging_success=false
+    if [ "$component_type" = "github" ]; then
+        # Stage GitHub component
+        if download_component "$component_type" "$staging_dir/.github"; then
+            # Validate GitHub structure in staging
+            if validate_github_structure "$staging_dir/.github"; then
+                echo "GitHub component staged and validated successfully."
+                staging_success=true
+            else
+                echo "Error: GitHub component validation failed in staging area." >&2
+            fi
+        else
+            echo "Error: Failed to download GitHub component to staging area." >&2
+        fi
+    elif [ "$component_type" = "roo" ]; then
+        # Stage roo component (download_component expects directory, creates .roomodes inside it)
+        if download_component "$component_type" "$staging_dir"; then
+            # Basic validation - check file exists and is not empty
+            if [ -s "$staging_dir/.roomodes" ]; then
+                echo "Roo component staged and validated successfully."
+                staging_success=true
+            else
+                echo "Error: Roo component is empty or invalid." >&2
+            fi
+        else
+            echo "Error: Failed to download roo component to staging area." >&2
+        fi
+    fi
+    
+    # Stage 2: Validate staging completed successfully
+    if [ "$staging_success" != "true" ]; then
+        echo "Error: Staging phase failed. Cleaning up..." >&2
+        rm -rf "$staging_dir"
+        return 1
+    fi
+    
+    echo "Stage 2: Staging validation completed successfully."
+    
+    # Stage 3: Create backup of existing installation (unless SKIP_BACKUP is set)
+    echo "Stage 3: Creating backup of existing installation..."
+    
+    local target_path=""
+    local backup_path=""
+    
+    if [ "$component_type" = "github" ]; then
+        target_path="$REPO_ROOT/.github"
+    elif [ "$component_type" = "roo" ]; then
+        target_path="$REPO_ROOT/.roomodes"
+    fi
+    
+    # Only backup if target exists and SKIP_BACKUP is not set
+    if [ -e "$target_path" ]; then
+        if [ "${SKIP_BACKUP:-}" = "true" ]; then
+            echo "Backup skipped (SKIP_BACKUP=true)."
+            echo "⚠️  WARNING: No backup will be created for existing $component_type installation!"
+        else
+            echo "Creating backup for existing $component_type installation..."
+            set +e  # Temporarily disable exit on error
+            backup_path=$(backup_existing "$component_type" "$target_path")
+            local backup_result=$?
+            set -e  # Re-enable exit on error
+            
+            if [ $backup_result -eq 0 ] && [ -n "$backup_path" ]; then
+                echo "Backup created: $backup_path"
+            else
+                echo "Error: Failed to create backup (result: $backup_result). Aborting atomic installation." >&2
+                rm -rf "$staging_dir"
+                return 1
+            fi
+        fi
+    else
+        echo "No existing $component_type installation found. Skipping backup."
+    fi
+    
+    # Stage 4: Atomic move from staging to final location
+    echo "Stage 4: Performing atomic move from staging to final location..."
+    
+    local move_success=false
+    if [ "$component_type" = "github" ]; then
+        # Remove existing .github if it exists, then move from staging
+        if [ -e "$REPO_ROOT/.github" ]; then
+            rm -rf "$REPO_ROOT/.github" || {
+                echo "Error: Failed to remove existing .github directory." >&2
+                # Attempt to restore from backup if we created one
+                if [ -n "$backup_path" ] && [ -e "$backup_path" ]; then
+                    echo "Attempting to restore from backup..."
+                    cp -r "$backup_path" "$REPO_ROOT/.github" 2>/dev/null || true
+                fi
+                rm -rf "$staging_dir"
+                return 1
+            }
+        fi
+        
+        if mv "$staging_dir/.github" "$REPO_ROOT/.github"; then
+            echo "GitHub component moved to final location successfully."
+            move_success=true
+        else
+            echo "Error: Failed to move GitHub component from staging." >&2
+        fi
+        
+    elif [ "$component_type" = "roo" ]; then
+        # Move roomodes file from staging
+        if mv "$staging_dir/.roomodes" "$REPO_ROOT/.roomodes"; then
+            echo "Roo component moved to final location successfully."
+            move_success=true
+        else
+            echo "Error: Failed to move roo component from staging." >&2
+        fi
+    fi
+    
+    # Stage 5: Handle success or failure
+    if [ "$move_success" = "true" ]; then
+        echo "Stage 5: Atomic installation completed successfully."
+        
+        # Stage 6: Update checksums and installation history
+        echo "Stage 6: Updating checksums and installation history..."
+        
+        local checksum_success=false
+        local history_success=false
+        
+        # Generate new checksums for the installed component
+        if [ "$component_type" = "github" ]; then
+            if generate_github_checksums; then
+                checksum_success=true
+            else
+                echo "Warning: Failed to update GitHub checksums." >&2
+            fi
+        elif [ "$component_type" = "roo" ]; then
+            if generate_roomodes_checksum; then
+                checksum_success=true
+            else
+                echo "Warning: Failed to update roomodes checksum." >&2
+            fi
+        fi
+        
+        # Update installation history
+        if update_installation_history "$component_type"; then
+            history_success=true
+        else
+            echo "Warning: Failed to update installation history." >&2
+        fi
+        
+        # Report final status
+        if [ "$checksum_success" = "true" ] && [ "$history_success" = "true" ]; then
+            echo "Installation tracking updated successfully."
+        else
+            echo "Warning: Some tracking updates failed, but installation was successful."
+        fi
+        
+        # Clean up staging directory
+        rm -rf "$staging_dir"
+        return 0
+    else
+        echo "Stage 5: Atomic installation failed. Performing rollback..." >&2
+        
+        # Attempt to restore from backup if we created one
+        if [ -n "$backup_path" ] && [ -e "$backup_path" ]; then
+            echo "Restoring from backup: $backup_path"
+            if [ "$component_type" = "github" ]; then
+                rm -rf "$REPO_ROOT/.github" 2>/dev/null || true
+                cp -r "$backup_path" "$REPO_ROOT/.github" 2>/dev/null && echo "Rollback successful." || echo "Rollback failed."
+            elif [ "$component_type" = "roo" ]; then
+                rm -f "$REPO_ROOT/.roomodes" 2>/dev/null || true
+                cp "$backup_path" "$REPO_ROOT/.roomodes" 2>/dev/null && echo "Rollback successful." || echo "Rollback failed."
+            fi
+        else
+            echo "No backup available for rollback."
+        fi
+        
+        # Clean up staging directory
+        rm -rf "$staging_dir"
+        return 1
+    fi
+}
+
+# Generate checksums for GitHub directory
+generate_github_checksums() {
+    local github_dir="${1:-$REPO_ROOT/.github}"
+    local output_file="$STATE_DIR/checksums/github_checksums"
+    
+    # Validate GitHub directory exists
+    if [ ! -d "$github_dir" ]; then
+        echo "Error: GitHub directory does not exist: $github_dir" >&2
+        return 1
+    fi
+    
+    echo "Generating checksums for GitHub directory: $github_dir"
+    
+    # Create checksums directory if it doesn't exist
+    if ! mkdir -p "$STATE_DIR/checksums"; then
+        echo "Error: Failed to create checksums directory." >&2
+        return 1
+    fi
+    
+    # Generate checksums for all files in .github directory
+    # Use find with sha256sum to recursively checksum all files
+    if find "$github_dir" -type f -exec sha256sum {} \; > "$output_file" 2>/dev/null; then
+        local file_count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
+        echo "Generated checksums for $file_count files in GitHub directory."
+        echo "Checksums stored in: $output_file"
+        return 0
+    else
+        echo "Error: Failed to generate checksums for GitHub directory." >&2
+        return 1
+    fi
+}
+
+# Generate checksum for roomodes file
+generate_roomodes_checksum() {
+    local roomodes_file="${1:-$REPO_ROOT/.roomodes}"
+    local output_file="$STATE_DIR/checksums/roomodes_checksum"
+    
+    # Validate roomodes file exists
+    if [ ! -f "$roomodes_file" ]; then
+        echo "Error: Roomodes file does not exist: $roomodes_file" >&2
+        return 1
+    fi
+    
+    echo "Generating checksum for roomodes file: $roomodes_file"
+    
+    # Create checksums directory if it doesn't exist
+    if ! mkdir -p "$STATE_DIR/checksums"; then
+        echo "Error: Failed to create checksums directory." >&2
+        return 1
+    fi
+    
+    # Generate SHA256 checksum for .roomodes file
+    if sha256sum "$roomodes_file" > "$output_file" 2>/dev/null; then
+        echo "Generated checksum for roomodes file."
+        echo "Checksum stored in: $output_file"
+        return 0
+    else
+        echo "Error: Failed to generate checksum for roomodes file." >&2
+        return 1
+    fi
+}
+
+# Update installation history after successful installation
+update_installation_history() {
+    local component_type="$1"
+    
+    # Validate parameter
+    if [ -z "$component_type" ]; then
+        echo "Error: update_installation_history requires component_type parameter." >&2
+        return 1
+    fi
+    
+    # Validate component type
+    if [ "$component_type" != "github" ] && [ "$component_type" != "roo" ]; then
+        echo "Error: Invalid component type '$component_type'. Must be 'github' or 'roo'." >&2
+        return 1
+    fi
+    
+    echo "Updating installation history for $component_type component..."
+    
+    local install_history="$STATE_DIR/install_history"
+    local install_timestamp=$(date +%s)  # Unix timestamp
+    
+    # Ensure state directory exists
+    if ! mkdir -p "$STATE_DIR"; then
+        echo "Error: Failed to create state directory." >&2
+        return 1
+    fi
+    
+    if [ "$component_type" = "github" ]; then
+        # Check if .github directory exists
+        if [ ! -d "$REPO_ROOT/.github" ]; then
+            echo "Error: .github directory does not exist. Cannot update history." >&2
+            return 1
+        fi
+        
+        # Remove any existing github entries from history
+        if [ -f "$install_history" ]; then
+            grep -v "^github:" "$install_history" > "$install_history.tmp" 2>/dev/null || touch "$install_history.tmp"
+            mv "$install_history.tmp" "$install_history"
+        fi
+        
+        # Add new history entries for all files in .github directory
+        find "$REPO_ROOT/.github" -type f | while read -r file_path; do
+            # Calculate relative path from repository root
+            local relative_path="${file_path#$REPO_ROOT/}"
+            
+            # Generate SHA256 hash for the file
+            local file_hash=$(sha256sum "$file_path" 2>/dev/null | cut -d' ' -f1)
+            
+            if [ -n "$file_hash" ]; then
+                # Format: component_type:file_path:sha256_hash:install_timestamp
+                echo "github:$relative_path:$file_hash:$install_timestamp" >> "$install_history"
+            else
+                echo "Warning: Failed to generate hash for file: $relative_path" >&2
+            fi
+        done
+        
+        echo "Updated installation history for GitHub component ($(find "$REPO_ROOT/.github" -type f | wc -l) files)."
+        
+    elif [ "$component_type" = "roo" ]; then
+        # Check if .roomodes file exists
+        if [ ! -f "$REPO_ROOT/.roomodes" ]; then
+            echo "Error: .roomodes file does not exist. Cannot update history." >&2
+            return 1
+        fi
+        
+        # Remove any existing roo entries from history
+        if [ -f "$install_history" ]; then
+            grep -v "^roo:" "$install_history" > "$install_history.tmp" 2>/dev/null || touch "$install_history.tmp"
+            mv "$install_history.tmp" "$install_history"
+        fi
+        
+        # Generate SHA256 hash for .roomodes file
+        local file_hash=$(sha256sum "$REPO_ROOT/.roomodes" 2>/dev/null | cut -d' ' -f1)
+        
+        if [ -n "$file_hash" ]; then
+            # Format: component_type:file_path:sha256_hash:install_timestamp
+            echo "roo:.roomodes:$file_hash:$install_timestamp" >> "$install_history"
+            echo "Updated installation history for roo component."
+        else
+            echo "Error: Failed to generate hash for .roomodes file." >&2
+            return 1
+        fi
+    fi
+    
+    echo "Installation history updated in: $install_history"
+    return 0
+}
+
+# Interactive confirmation system for when modifications are detected
+interactive_confirmation() {
+    local component_type="$1"
+    
+    # Validate parameter
+    if [ -z "$component_type" ]; then
+        echo "Error: interactive_confirmation requires component_type parameter." >&2
+        return 1
+    fi
+    
+    echo ""
+    echo "⚠️  MODIFICATIONS DETECTED"
+    echo "========================="
+    echo ""
+    echo "The $component_type component has been modified since installation."
+    echo "Continuing will overwrite your changes."
+    echo ""
+    echo "Choose action:"
+    echo "  [1] Continue and backup modifications (recommended)"
+    echo "  [2] Continue without backup (destructive)"
+    echo "  [3] Cancel update"
+    echo ""
+    echo -n "Selection [1]: "
+    
+    # Read user input with timeout for automated environments
+    local choice=""
+    if read -t 30 choice; then
+        # User provided input
+        case "$choice" in
+            ""|1)
+                echo "Selected: Continue and backup modifications"
+                return 1  # Backup and continue
+                ;;
+            2)
+                echo "Selected: Continue without backup"
+                return 2  # Continue without backup
+                ;;
+            3)
+                echo "Selected: Cancel update"
+                return 3  # Cancel
+                ;;
+            *)
+                echo "Invalid selection '$choice'. Defaulting to backup and continue."
+                return 1  # Default to backup and continue
+                ;;
+        esac
+    else
+        # Timeout or no input - default to safest option
+        echo ""
+        echo "No input received. Defaulting to backup and continue (safest option)."
+        return 1  # Backup and continue
+    fi
+}
+
+# Parse command line arguments
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                help=true
+                shift
+                ;;
+            -f|--force)
+                force=true
+                shift
+                ;;
+            -d|--dry-run)
+                dry_run=true
+                shift
+                ;;
+            -g|--github)
+                github_mode=true
+                shift
+                ;;
+            -r|--roo)
+                roo_mode=true
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                echo "Use --help for usage information."
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Display help information
+show_help() {
+    cat << EOF
+kodik Install and Update Script
+
+USAGE:
+    $SCRIPT_NAME [OPTIONS] [MODE]
+
+DESCRIPTION:
+    Automates the installation and updating of kodik repository configurations.
+    Downloads and manages two critical components:
+    - .github/ directory (containing chatmode definitions and prompts)
+    - .roomodes file (containing Roo Code configuration)
+
+OPTIONS:
+    -h, --help      Show this help information and exit
+    -f, --force     Skip backups and confirmations (destructive)
+    -d, --dry-run   Preview actions without making any changes
+
+MODE:
+    --github, -g    Install/update only .github directory
+    --roo, -r       Install/update only .roomodes file
+    (no mode)       Install/update both components (default behavior)
+
+EXAMPLES:
+    $SCRIPT_NAME                    # Install/update both components
+    $SCRIPT_NAME --github           # Install/update only GitHub configurations
+    $SCRIPT_NAME --roo              # Install/update only roo code
+    $SCRIPT_NAME --dry-run          # Preview what would be done
+    $SCRIPT_NAME --force --github   # Force update GitHub configs without backup
+
+SOURCE:
+    Downloads from: https://github.com/nkyriakidis/kodik (main branch)
+
+EOF
+}
+
+# Validate argument combinations
+validate_arguments() {
+    # Validate mode combinations (can't have both github and roo mode)
+    if [ "$github_mode" = true ] && [ "$roo_mode" = true ]; then
+        echo "Error: Cannot specify both --github and --roo modes simultaneously."
+        echo "Use --help for usage information."
+        exit 1
+    fi
+}
+
+# Main script entry point
+main() {
+    # Parse command line arguments
+    parse_arguments "$@"
+    
+    # Show help if requested
+    if [ "$help" = true ]; then
+        show_help
+        exit 0
+    fi
+    
+    # Check system compatibility and required utilities
+    if ! check_compatibility; then
+        exit $ERROR_SYSTEM
+    fi
+    
+    echo ""
+    
+    # Detect repository root
+    detect_repository_root
+    
+    # Initialize state directory
+    initialize_state_directory
+    
+    # Validate arguments
+    validate_arguments
+    
+    echo "kodik Install and Update Script"
+    echo "==============================="
+    
+    # Show parsed options for debugging
+    echo "Parsed options:"
+    echo "  Help: $help"
+    echo "  Force: $force" 
+    echo "  Dry run: $dry_run"
+    echo "  GitHub mode: $github_mode"
+    echo "  Roo mode: $roo_mode"
+    echo "  Repository root: $REPO_ROOT"
+    echo "  State directory: $STATE_DIR"
+    echo "  GitHub archive URL: $GITHUB_ARCHIVE_URL"
+    echo "  Roomodes raw URL: $ROOMODES_RAW_URL"
+    
+    # Placeholder for main logic
+    echo "Script structure initialized successfully."
+    
+    # Handle dry run mode
+    if [ "$dry_run" = true ]; then
+        echo ""
+        echo "DRY RUN MODE - No changes will be made"
+        echo "======================================="
+        
+        # Determine which components to analyze
+        local components_to_check=()
+        if [ "$github_mode" = true ]; then
+            components_to_check=("github")
+        elif [ "$roo_mode" = true ]; then
+            components_to_check=("roo")
+        else
+            components_to_check=("github" "roo")
+        fi
+        
+        echo "Analyzing current state..."
+        echo ""
+        
+        local total_backup_size=0
+        local github_size=0
+        local roomodes_size=0
+        
+        # Analyze each component
+        for component in "${components_to_check[@]}"; do
+            echo "Component: $component"
+            echo "---------------------"
+            
+            # Calculate backup size for existing component
+            local component_size=0
+            if [ "$component" = "github" ]; then
+                if [ -d "$REPO_ROOT/.github" ]; then
+                    # Calculate size of all files in .github directory
+                    component_size=$(find "$REPO_ROOT/.github" -type f -exec wc -c {} + 2>/dev/null | tail -1 | awk '{print $1}' || echo 0)
+                    github_size=$component_size
+                fi
+            elif [ "$component" = "roo" ]; then
+                if [ -f "$REPO_ROOT/.roomodes" ]; then
+                    # Calculate size of .roomodes file
+                    component_size=$(wc -c < "$REPO_ROOT/.roomodes" 2>/dev/null || echo 0)
+                    roomodes_size=$component_size
+                fi
+            fi
+            
+            # Check for modifications using detect_modifications function
+            set +e  # Temporarily disable exit on error
+            detect_modifications "$component"
+            local mod_result=$?
+            set -e  # Re-enable exit on error
+            
+            case $mod_result in
+                    0)
+                        echo "Status: No modifications detected"
+                        echo "Action: No update needed"
+                        ;;
+                    1)
+                        echo "Status: Modifications detected"
+                        echo "Action: Would update $component component"
+                        if [ $component_size -gt 0 ]; then
+                            echo "Backup size: $(format_size $component_size)"
+                            total_backup_size=$((total_backup_size + component_size))
+                        fi
+                        ;;
+                    2)
+                        echo "Status: No installation history found"
+                        echo "Action: Would perform initial installation of $component component"
+                        if [ $component_size -gt 0 ]; then
+                            echo "Backup size: $(format_size $component_size)"
+                            total_backup_size=$((total_backup_size + component_size))
+                        fi
+                        ;;
+                    *)
+                        echo "Status: Error checking modifications"
+                        echo "Action: Would attempt to resolve and install $component component"
+                        if [ $component_size -gt 0 ]; then
+                            echo "Backup size: $(format_size $component_size)"
+                            total_backup_size=$((total_backup_size + component_size))
+                        fi
+                        ;;
+                esac
+            
+            echo ""
+        done
+        
+        echo "ANALYSIS RESULTS:"
+        echo "-----------------"
+        for component in "${components_to_check[@]}"; do
+            if [ "$component" = "github" ]; then
+                if [ -d "$REPO_ROOT/.github" ]; then
+                    echo "✓ .github directory: Exists"
+                else
+                    echo "✗ .github directory: Not found"
+                fi
+            elif [ "$component" = "roo" ]; then
+                if [ -f "$REPO_ROOT/.roomodes" ]; then
+                    echo "✓ .roomodes file: Exists"
+                else
+                    echo "✗ .roomodes file: Not found"
+                fi
+            fi
+        done
+        echo ""
+        
+        echo "PLANNED ACTIONS:"
+        echo "----------------"
+        for component in "${components_to_check[@]}"; do
+            if [ "$component" = "github" ]; then
+                if [ -d "$REPO_ROOT/.github" ]; then
+                    echo "• .github directory would be backed up to: $STATE_DIR/backups/YYYY-MM-DD_HH-MM-SS_github/"
+                fi
+                echo "• .github directory would be updated from: $GITHUB_ARCHIVE_URL"
+            elif [ "$component" = "roo" ]; then
+                if [ -f "$REPO_ROOT/.roomodes" ]; then
+                    echo "• .roomodes file would be backed up to: $STATE_DIR/backups/YYYY-MM-DD_HH-MM-SS_roo"
+                fi
+                echo "• .roomodes file would be updated from: $ROOMODES_RAW_URL"
+            fi
+        done
+        echo ""
+        
+        echo "SOURCE INFORMATION:"
+        echo "-------------------"
+        echo "• Repository: https://github.com/nkyriakidis/kodik"
+        echo "• Branch: main (latest)"
+        if [ ${#components_to_check[@]} -gt 1 ] || [ "$github_mode" = true ]; then
+            echo "• .github archive size: ~$(format_size $github_size) (estimated)"
+        fi
+        if [ ${#components_to_check[@]} -gt 1 ] || [ "$roo_mode" = true ]; then
+            echo "• .roomodes file size: ~$(format_size $roomodes_size)"
+        fi
+        echo ""
+        
+        echo "BACKUP STRATEGY:"
+        echo "----------------"
+        echo "• Total backup size: $(format_size $total_backup_size)"
+        echo "• Estimated download size: ~$(format_size $((github_size + roomodes_size)))"
+        echo "• Network connectivity: Required"
+        echo ""
+        
+        echo "To execute these changes, run: ./scripts/install_update.sh"
+        
+        exit 0
+    fi
+    
+    # Main installation/update logic
+    echo ""
+    echo "INSTALLATION/UPDATE MODE"
+    echo "========================"
+    
+    # Determine which components to process
+    local components_to_process=()
+    if [ "$github_mode" = true ]; then
+        components_to_process=("github")
+        echo "Mode: GitHub-only installation/update"
+    elif [ "$roo_mode" = true ]; then
+        components_to_process=("roo")
+        echo "Mode: Roo-only installation/update"
+    else
+        components_to_process=("github" "roo")
+        echo "Mode: Full installation/update (both components)"
+    fi
+    
+    echo "Components to process: ${components_to_process[*]}"
+    echo ""
+    
+    # Process each component
+    local overall_success=true
+    for component in "${components_to_process[@]}"; do
+        echo "Processing $component component..."
+        echo "=================================="
+        
+        # Check for modifications unless force mode is enabled
+        local proceed_with_backup=true
+        local proceed_without_backup=false
+        local cancel_update=false
+        
+        if [ "$force" != "true" ]; then
+            # Detect modifications and handle accordingly (capture return code without triggering set -e)
+            set +e  # Temporarily disable exit on error
+            detect_modifications "$component"
+            local mod_result=$?
+            set -e  # Re-enable exit on error
+            
+            case $mod_result in
+                0)
+                    echo "No modifications detected. Proceeding with update..."
+                    proceed_with_backup=true
+                    ;;
+                1)
+                    echo "Modifications detected!"
+                    
+                    # Use interactive confirmation to determine action (disable set -e)
+                    set +e  # Temporarily disable exit on error
+                    interactive_confirmation "$component"
+                    local user_choice=$?
+                    set -e  # Re-enable exit on error
+                    
+                    case $user_choice in
+                        1)
+                            # Continue and backup
+                            proceed_with_backup=true
+                            proceed_without_backup=false
+                            ;;
+                        2)
+                            # Continue without backup
+                            proceed_with_backup=false
+                            proceed_without_backup=true
+                            ;;
+                        3)
+                            # Cancel
+                            cancel_update=true
+                            ;;
+                        *)
+                            # Default to backup and continue
+                            proceed_with_backup=true
+                            proceed_without_backup=false
+                            ;;
+                    esac
+                    ;;
+                2)
+                    echo "No installation history found. Performing initial installation..."
+                    proceed_with_backup=true
+                    ;;
+                *)
+                    echo "Error checking modifications. Proceeding with caution (backup enabled)..."
+                    proceed_with_backup=true
+                    ;;
+            esac
+        else
+            # Force mode - skip all confirmations
+            echo "Force mode enabled - skipping modification checks and confirmations."
+            echo "⚠️  WARNING: Backups will be skipped in force mode!"
+            proceed_with_backup=false
+            proceed_without_backup=true
+        fi
+        
+        # Handle user's decision
+        if [ "$cancel_update" = "true" ]; then
+            echo "Update cancelled by user for $component component."
+            echo "Existing files preserved."
+            overall_success=false
+            continue
+        fi
+        
+        # Perform the installation/update
+        echo ""
+        if [ "$proceed_with_backup" = "true" ]; then
+            echo "Installing $component component with backup protection..."
+            if atomic_install "$component"; then
+                echo "✅ $component component installed successfully with backup protection."
+            else
+                echo "❌ Failed to install $component component."
+                overall_success=false
+            fi
+        elif [ "$proceed_without_backup" = "true" ]; then
+            echo "Installing $component component WITHOUT backup protection..."
+            echo "⚠️  WARNING: Existing files will be overwritten without backup!"
+            
+            # For force mode, we need a version of atomic_install that skips backup
+            # For now, we'll modify the behavior by temporarily setting a flag
+            SKIP_BACKUP=true atomic_install "$component"
+            local install_result=$?
+            unset SKIP_BACKUP
+            
+            if [ $install_result -eq 0 ]; then
+                echo "✅ $component component installed successfully (no backup created)."
+            else
+                echo "❌ Failed to install $component component."
+                overall_success=false
+            fi
+        fi
+        
+        echo ""
+    done
+    
+    # Final summary
+    echo "INSTALLATION SUMMARY"
+    echo "==================="
+    if [ "$overall_success" = "true" ]; then
+        echo "✅ All components processed successfully!"
+        echo ""
+        echo "Next steps:"
+        echo "• Check the installed configurations in your repository"
+        echo "• Backups (if created) are stored in: $STATE_DIR/backups/"
+        echo "• Installation history is tracked in: $STATE_DIR/install_history"
+    else
+        echo "⚠️  Some components failed to install or were cancelled."
+        echo "Check the output above for details."
+        echo ""
+        echo "Recovery options:"
+        echo "• Review any backups in: $STATE_DIR/backups/"
+        echo "• Check restoration_log.txt for restore commands"
+        echo "• Re-run the script to retry failed components"
+    fi
+    
+    # Exit with appropriate code
+    if [ "$overall_success" = "true" ]; then
+        exit 0
+    else
+        exit 1
+    fi
+    
+    # Test backup_existing if TEST_BACKUP_EXISTING is set
+    if [ "${TEST_BACKUP_EXISTING:-}" = "true" ]; then
+        echo "Testing backup_existing function..."
+        backup_path=$(backup_existing "${TEST_COMPONENT_TYPE:-github}" "${TEST_SOURCE_PATH:-/tmp/test_file}")
+        result=$?
+        echo "backup_existing returned: $result"
+        if [ $result -eq 0 ]; then
+            echo "Backup path: $backup_path"
+        fi
+        exit $result
+    fi
+    
+    # Test error handling if TEST_ERROR_HANDLING is set
+    if [ "${TEST_ERROR_HANDLING:-}" = "true" ]; then
+        echo "Testing error handling..."
+        
+        # Add a temporary file to track cleanup
+        test_temp_file="$STATE_DIR/temp/test_cleanup_file"
+        mkdir -p "$(dirname "$test_temp_file")"
+        echo "test cleanup content" > "$test_temp_file"
+        TEMP_FILES+=("$test_temp_file")
+        
+        echo "Created temporary file: $test_temp_file"
+        echo "Triggering intentional error..."
+        
+        # Force an error to test cleanup
+        exit 1
+    fi
+    
+    # Test download_component if TEST_DOWNLOAD_COMPONENT is set
+    if [ "${TEST_DOWNLOAD_COMPONENT:-}" = "true" ]; then
+        echo "Testing download_component function..."
+        
+        local test_dest="$STATE_DIR/temp/test_download"
+        mkdir -p "$test_dest"
+        
+        download_component "${TEST_COMPONENT_TYPE:-github}" "$test_dest"
+        result=$?
+        echo "download_component returned: $result"
+        
+        if [ $result -eq 0 ]; then
+            echo "Download test completed successfully."
+            if [ "$TEST_COMPONENT_TYPE" = "github" ] || [ -z "$TEST_COMPONENT_TYPE" ]; then
+                echo "Checking for .github directory in test destination..."
+                ls -la "$test_dest/"
+            fi
+        fi
+        
+        exit $result
+    fi
+}
+
+# Execute main function
+main "$@"
