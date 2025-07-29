@@ -248,14 +248,40 @@ detect_modifications() {
             return 2  # No installation to check
         fi
         
-        # Generate current checksums for GitHub directory
+        # Generate current checksums for kodik-specific files in GitHub directory
         current_checksums_file="$temp_checksums_dir/current_github_checksums"
         stored_checksums_file="$STATE_DIR/checksums/github_checksums"
         
-        if ! find "$REPO_ROOT/.github" -type f -exec sha256sum {} \; > "$current_checksums_file" 2>/dev/null; then
-            echo "Error: Failed to generate current checksums for GitHub directory." >&2
-            rm -rf "$temp_checksums_dir"
-            return 1
+        # Clear the current checksums file
+        > "$current_checksums_file"
+        
+        # Generate checksums for kodik-specific chatmode files
+        if [ -d "$REPO_ROOT/.github/chatmodes" ]; then
+            for chatmode_file in "$REPO_ROOT/.github/chatmodes"/kodik*.chatmode.md; do
+                if [ -f "$chatmode_file" ]; then
+                    sha256sum "$chatmode_file" >> "$current_checksums_file" 2>/dev/null
+                fi
+            done
+        fi
+        
+        # Generate checksums for kodik-specific prompt files
+        if [ -d "$REPO_ROOT/.github/prompts" ]; then
+            # Define kodik-specific prompt files to checksum
+            local kodik_prompts=(
+                "kodik-complete-tasks.prompt.md"
+                "kodik-generate-design.prompt.md" 
+                "kodik-generate-spec.prompt.md"
+                "kodik-generate-tasks.prompt.md"
+                "generate-instructions.prompt.md"
+                "generate-readme.prompt.md"
+                "generate-review-plan.prompt.md"
+            )
+            
+            for prompt_file in "${kodik_prompts[@]}"; do
+                if [ -f "$REPO_ROOT/.github/prompts/$prompt_file" ]; then
+                    sha256sum "$REPO_ROOT/.github/prompts/$prompt_file" >> "$current_checksums_file" 2>/dev/null
+                fi
+            done
         fi
         
     elif [ "$component_type" = "roo" ]; then
@@ -327,6 +353,119 @@ detect_modifications() {
 }
 
 # Create timestamped backups of existing files/directories
+# Backup only kodik-specific files from the .github directory
+backup_kodik_files() {
+    local github_dir="$1"
+    
+    # Validate parameter
+    if [ -z "$github_dir" ]; then
+        echo "Error: backup_kodik_files requires github_dir parameter." >&2
+        return 1
+    fi
+    
+    # Check if source directory exists
+    if [ ! -d "$github_dir" ]; then
+        echo "GitHub directory does not exist: $github_dir"
+        return 1
+    fi
+    
+    # Generate timestamp in YYYY-MM-DD_HH-MM-SS format
+    local timestamp=$(date '+%Y-%m-%d_%H-%M-%S')
+    local unix_timestamp=$(date +%s)
+    
+    # Create backup directory path
+    local backup_name="${timestamp}_github_kodik_files"
+    local backup_path="$STATE_DIR/backups/$backup_name"
+    
+    echo "Creating selective backup of kodik files: $github_dir -> $backup_path" >&2
+    
+    # Create backup directory structure
+    mkdir -p "$backup_path" || {
+        echo "Error: Failed to create backup directory: $backup_path" >&2
+        return 1
+    }
+    
+    # Backup kodik-specific chatmode files
+    local backup_success=false
+    local backed_up_files=0
+    
+    if [ -d "$github_dir/chatmodes" ]; then
+        mkdir -p "$backup_path/chatmodes"
+        # Find and backup kodik-prefixed chatmode files
+        for chatmode_file in "$github_dir/chatmodes"/kodik*.chatmode.md; do
+            if [ -f "$chatmode_file" ]; then
+                cp "$chatmode_file" "$backup_path/chatmodes/" 2>/dev/null && {
+                    backed_up_files=$((backed_up_files + 1))
+                    echo "Backed up: $(basename "$chatmode_file")" >&2
+                }
+            fi
+        done
+    fi
+    
+    # Backup kodik-specific prompt files
+    if [ -d "$github_dir/prompts" ]; then
+        mkdir -p "$backup_path/prompts"
+        
+        # Define kodik-specific prompt files to backup
+        local kodik_prompts=(
+            "kodik-complete-tasks.prompt.md"
+            "kodik-generate-design.prompt.md" 
+            "kodik-generate-spec.prompt.md"
+            "kodik-generate-tasks.prompt.md"
+            "generate-instructions.prompt.md"
+            "generate-readme.prompt.md"
+            "generate-review-plan.prompt.md"
+        )
+        
+        for prompt_file in "${kodik_prompts[@]}"; do
+            if [ -f "$github_dir/prompts/$prompt_file" ]; then
+                cp "$github_dir/prompts/$prompt_file" "$backup_path/prompts/" 2>/dev/null && {
+                    backed_up_files=$((backed_up_files + 1))
+                    echo "Backed up: $prompt_file" >&2
+                }
+            fi
+        done
+    fi
+    
+    if [ $backed_up_files -gt 0 ]; then
+        echo "Selective backup created: $backup_path ($backed_up_files files)" >&2
+        backup_success=true
+    else
+        echo "No kodik-specific files found to backup" >&2
+        # Remove empty backup directory
+        rm -rf "$backup_path" 2>/dev/null || true
+        backup_success=true  # This is not an error - just no files to backup
+    fi
+    
+    # Update restoration log with backup metadata
+    if [ "$backup_success" = "true" ] && [ $backed_up_files -gt 0 ]; then
+        local restoration_log="$STATE_DIR/backups/restoration_log.txt"
+        
+        # Create restoration log if it doesn't exist
+        if [ ! -f "$restoration_log" ]; then
+            echo "# Backup Restoration Log" > "$restoration_log"
+            echo "# Format: timestamp|component|original_path|backup_path|restore_command" >> "$restoration_log"
+            echo "# Use the restore_command to restore backed up files/directories" >> "$restoration_log"
+            echo "" >> "$restoration_log"
+        fi
+        
+        # Add backup entry to restoration log
+        local restore_command="# Manual restore required for selective kodik backup: $backup_path"
+        echo "$unix_timestamp|github_kodik|$github_dir|$backup_path|$restore_command" >> "$restoration_log"
+        
+        echo "Backup metadata logged to: $restoration_log" >&2
+    fi
+    
+    # Return the backup path (output to stdout for caller to capture)
+    if [ $backed_up_files -gt 0 ]; then
+        echo "$backup_path"
+    else
+        echo ""  # No backup created
+    fi
+    return 0
+}
+
+# Backup entire directory or file (used for non-github components)
 backup_existing() {
     local component_type="$1"
     local source_path="$2"
@@ -683,8 +822,8 @@ atomic_install() {
     
     echo "Stage 2: Staging validation completed successfully."
     
-    # Stage 3: Create backup of existing installation (unless SKIP_BACKUP is set)
-    echo "Stage 3: Creating backup of existing installation..."
+    # Stage 3: Create backup of existing kodik-specific files (unless SKIP_BACKUP is set)
+    echo "Stage 3: Creating backup of existing kodik-specific files..."
     
     local target_path=""
     local backup_path=""
@@ -703,7 +842,14 @@ atomic_install() {
         else
             echo "Creating backup for existing $component_type installation..."
             set +e  # Temporarily disable exit on error
-            backup_path=$(backup_existing "$component_type" "$target_path")
+            
+            if [ "$component_type" = "github" ]; then
+                # Create a selective backup of only kodik-specific files
+                backup_path=$(backup_kodik_files "$target_path")
+            else
+                # For roo component, backup the entire file as before
+                backup_path=$(backup_existing "$component_type" "$target_path")
+            fi
             local backup_result=$?
             set -e  # Re-enable exit on error
             
@@ -724,25 +870,56 @@ atomic_install() {
     
     local move_success=false
     if [ "$component_type" = "github" ]; then
-        # Remove existing .github if it exists, then move from staging
-        if [ -e "$REPO_ROOT/.github" ]; then
-            rm -rf "$REPO_ROOT/.github" || {
-                echo "Error: Failed to remove existing .github directory." >&2
-                # Attempt to restore from backup if we created one
-                if [ -n "$backup_path" ] && [ -e "$backup_path" ]; then
-                    echo "Attempting to restore from backup..."
-                    cp -r "$backup_path" "$REPO_ROOT/.github" 2>/dev/null || true
-                fi
+        # Create .github directory if it doesn't exist
+        mkdir -p "$REPO_ROOT/.github"
+        
+        # Install only kodik-specific files, preserving existing non-kodik files
+        echo "Installing kodik-specific files to .github directory..."
+        
+        # Install chatmodes (only kodik-prefixed files)
+        if [ -d "$staging_dir/.github/chatmodes" ]; then
+            mkdir -p "$REPO_ROOT/.github/chatmodes"
+            # Copy only kodik-prefixed chatmode files
+            find "$staging_dir/.github/chatmodes" -name "kodik*.chatmode.md" -exec cp {} "$REPO_ROOT/.github/chatmodes/" \; || {
+                echo "Error: Failed to install kodik chatmode files." >&2
                 rm -rf "$staging_dir"
                 return 1
             }
+            echo "Installed kodik chatmode files."
         fi
         
-        if mv "$staging_dir/.github" "$REPO_ROOT/.github"; then
-            echo "GitHub component moved to final location successfully."
+        # Install prompts (only kodik-prefixed files and specific known files)
+        if [ -d "$staging_dir/.github/prompts" ]; then
+            mkdir -p "$REPO_ROOT/.github/prompts"
+            # Define kodik-specific prompt files to install
+            local kodik_prompts=(
+                "kodik-complete-tasks.prompt.md"
+                "kodik-generate-design.prompt.md" 
+                "kodik-generate-spec.prompt.md"
+                "kodik-generate-tasks.prompt.md"
+                "generate-instructions.prompt.md"
+                "generate-readme.prompt.md"
+                "generate-review-plan.prompt.md"
+            )
+            
+            for prompt_file in "${kodik_prompts[@]}"; do
+                if [ -f "$staging_dir/.github/prompts/$prompt_file" ]; then
+                    cp "$staging_dir/.github/prompts/$prompt_file" "$REPO_ROOT/.github/prompts/" || {
+                        echo "Error: Failed to install prompt file: $prompt_file" >&2
+                        rm -rf "$staging_dir"
+                        return 1
+                    }
+                fi
+            done
+            echo "Installed kodik prompt files."
+        fi
+        
+        # Verify installation succeeded
+        if [ -d "$REPO_ROOT/.github/chatmodes" ] && [ -d "$REPO_ROOT/.github/prompts" ]; then
+            echo "GitHub component installed successfully (preserving existing files)."
             move_success=true
         else
-            echo "Error: Failed to move GitHub component from staging." >&2
+            echo "Error: Failed to install GitHub component properly." >&2
         fi
         
     elif [ "$component_type" = "roo" ]; then
@@ -831,7 +1008,7 @@ generate_github_checksums() {
         return 1
     fi
     
-    echo "Generating checksums for GitHub directory: $github_dir"
+    echo "Generating checksums for kodik-specific files in GitHub directory: $github_dir"
     
     # Create checksums directory if it doesn't exist
     if ! mkdir -p "$STATE_DIR/checksums"; then
@@ -839,15 +1016,46 @@ generate_github_checksums() {
         return 1
     fi
     
-    # Generate checksums for all files in .github directory
-    # Use find with sha256sum to recursively checksum all files
-    if find "$github_dir" -type f -exec sha256sum {} \; > "$output_file" 2>/dev/null; then
-        local file_count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
-        echo "Generated checksums for $file_count files in GitHub directory."
+    # Clear the output file
+    > "$output_file"
+    
+    local file_count=0
+    
+    # Generate checksums for kodik-specific chatmode files
+    if [ -d "$github_dir/chatmodes" ]; then
+        for chatmode_file in "$github_dir/chatmodes"/kodik*.chatmode.md; do
+            if [ -f "$chatmode_file" ]; then
+                sha256sum "$chatmode_file" >> "$output_file" 2>/dev/null && file_count=$((file_count + 1))
+            fi
+        done
+    fi
+    
+    # Generate checksums for kodik-specific prompt files
+    if [ -d "$github_dir/prompts" ]; then
+        # Define kodik-specific prompt files to checksum
+        local kodik_prompts=(
+            "kodik-complete-tasks.prompt.md"
+            "kodik-generate-design.prompt.md" 
+            "kodik-generate-spec.prompt.md"
+            "kodik-generate-tasks.prompt.md"
+            "generate-instructions.prompt.md"
+            "generate-readme.prompt.md"
+            "generate-review-plan.prompt.md"
+        )
+        
+        for prompt_file in "${kodik_prompts[@]}"; do
+            if [ -f "$github_dir/prompts/$prompt_file" ]; then
+                sha256sum "$github_dir/prompts/$prompt_file" >> "$output_file" 2>/dev/null && file_count=$((file_count + 1))
+            fi
+        done
+    fi
+    
+    if [ $file_count -gt 0 ]; then
+        echo "Generated checksums for $file_count kodik-specific files."
         echo "Checksums stored in: $output_file"
         return 0
     else
-        echo "Error: Failed to generate checksums for GitHub directory." >&2
+        echo "No kodik-specific files found to checksum."
         return 1
     fi
 }
@@ -922,23 +1130,63 @@ update_installation_history() {
             mv "$install_history.tmp" "$install_history"
         fi
         
-        # Add new history entries for all files in .github directory
-        find "$REPO_ROOT/.github" -type f | while read -r file_path; do
-            # Calculate relative path from repository root
-            local relative_path="${file_path#$REPO_ROOT/}"
-            
-            # Generate SHA256 hash for the file
-            local file_hash=$(sha256sum "$file_path" 2>/dev/null | cut -d' ' -f1)
-            
-            if [ -n "$file_hash" ]; then
-                # Format: component_type:file_path:sha256_hash:install_timestamp
-                echo "github:$relative_path:$file_hash:$install_timestamp" >> "$install_history"
-            else
-                echo "Warning: Failed to generate hash for file: $relative_path" >&2
-            fi
-        done
+        local file_count=0
         
-        echo "Updated installation history for GitHub component ($(find "$REPO_ROOT/.github" -type f | wc -l) files)."
+        # Add history entries for kodik-specific chatmode files
+        if [ -d "$REPO_ROOT/.github/chatmodes" ]; then
+            for chatmode_file in "$REPO_ROOT/.github/chatmodes"/kodik*.chatmode.md; do
+                if [ -f "$chatmode_file" ]; then
+                    # Calculate relative path from repository root
+                    local relative_path="${chatmode_file#$REPO_ROOT/}"
+                    
+                    # Generate SHA256 hash for the file
+                    local file_hash=$(sha256sum "$chatmode_file" 2>/dev/null | cut -d' ' -f1)
+                    
+                    if [ -n "$file_hash" ]; then
+                        # Format: component_type:file_path:sha256_hash:install_timestamp
+                        echo "github:$relative_path:$file_hash:$install_timestamp" >> "$install_history"
+                        file_count=$((file_count + 1))
+                    else
+                        echo "Warning: Failed to generate hash for file: $relative_path" >&2
+                    fi
+                fi
+            done
+        fi
+        
+        # Add history entries for kodik-specific prompt files
+        if [ -d "$REPO_ROOT/.github/prompts" ]; then
+            # Define kodik-specific prompt files to track
+            local kodik_prompts=(
+                "kodik-complete-tasks.prompt.md"
+                "kodik-generate-design.prompt.md" 
+                "kodik-generate-spec.prompt.md"
+                "kodik-generate-tasks.prompt.md"
+                "generate-instructions.prompt.md"
+                "generate-readme.prompt.md"
+                "generate-review-plan.prompt.md"
+            )
+            
+            for prompt_file in "${kodik_prompts[@]}"; do
+                local full_path="$REPO_ROOT/.github/prompts/$prompt_file"
+                if [ -f "$full_path" ]; then
+                    # Calculate relative path from repository root
+                    local relative_path=".github/prompts/$prompt_file"
+                    
+                    # Generate SHA256 hash for the file
+                    local file_hash=$(sha256sum "$full_path" 2>/dev/null | cut -d' ' -f1)
+                    
+                    if [ -n "$file_hash" ]; then
+                        # Format: component_type:file_path:sha256_hash:install_timestamp
+                        echo "github:$relative_path:$file_hash:$install_timestamp" >> "$install_history"
+                        file_count=$((file_count + 1))
+                    else
+                        echo "Warning: Failed to generate hash for file: $relative_path" >&2
+                    fi
+                fi
+            done
+        fi
+        
+        echo "Updated installation history for GitHub component ($file_count kodik-specific files)."
         
     elif [ "$component_type" = "roo" ]; then
         # Check if .roomodes file exists
@@ -1177,12 +1425,44 @@ main() {
             echo "Component: $component"
             echo "---------------------"
             
-            # Calculate backup size for existing component
+            # Calculate backup size for existing kodik-specific files
             local component_size=0
             if [ "$component" = "github" ]; then
                 if [ -d "$REPO_ROOT/.github" ]; then
-                    # Calculate size of all files in .github directory
-                    component_size=$(find "$REPO_ROOT/.github" -type f -exec wc -c {} + 2>/dev/null | tail -1 | awk '{print $1}' || echo 0)
+                    # Calculate size of kodik-specific files only
+                    local temp_size=0
+                    
+                    # Size of kodik chatmode files
+                    if [ -d "$REPO_ROOT/.github/chatmodes" ]; then
+                        for chatmode_file in "$REPO_ROOT/.github/chatmodes"/kodik*.chatmode.md; do
+                            if [ -f "$chatmode_file" ]; then
+                                local file_size=$(wc -c < "$chatmode_file" 2>/dev/null || echo 0)
+                                temp_size=$((temp_size + file_size))
+                            fi
+                        done
+                    fi
+                    
+                    # Size of kodik prompt files
+                    if [ -d "$REPO_ROOT/.github/prompts" ]; then
+                        local kodik_prompts=(
+                            "kodik-complete-tasks.prompt.md"
+                            "kodik-generate-design.prompt.md" 
+                            "kodik-generate-spec.prompt.md"
+                            "kodik-generate-tasks.prompt.md"
+                            "generate-instructions.prompt.md"
+                            "generate-readme.prompt.md"
+                            "generate-review-plan.prompt.md"
+                        )
+                        
+                        for prompt_file in "${kodik_prompts[@]}"; do
+                            if [ -f "$REPO_ROOT/.github/prompts/$prompt_file" ]; then
+                                local file_size=$(wc -c < "$REPO_ROOT/.github/prompts/$prompt_file" 2>/dev/null || echo 0)
+                                temp_size=$((temp_size + file_size))
+                            fi
+                        done
+                    fi
+                    
+                    component_size=$temp_size
                     github_size=$component_size
                 fi
             elif [ "$component" = "roo" ]; then
