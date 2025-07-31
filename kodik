@@ -1059,8 +1059,12 @@ atomic_install() {
             local backup_result=$?
             set -e  # Re-enable exit on error
             
-            if [ $backup_result -eq 0 ] && [ -n "$backup_path" ]; then
-                echo "Backup created: $backup_path"
+            if [ $backup_result -eq 0 ]; then
+                if [ -n "$backup_path" ]; then
+                    echo "Backup created: $backup_path"
+                else
+                    echo "No backup needed (no kodik-specific files found)"
+                fi
             else
                 echo "Error: Failed to create backup (result: $backup_result). Aborting atomic installation." >&2
                 rm -rf "$staging_dir"
