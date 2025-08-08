@@ -1,0 +1,57 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mode": {
+    "my-custom-mode": {
+      "prompt": "You are a helpful assistant specialized in...",
+      "model": "anthropic/claude-3.5-sonnet",
+      "temperature": 0.3,
+      "maxTokens": 2000,
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": false
+      }
+    },
+    "another-custom-mode": {
+      "prompt": "{file:./path/to/custom/prompt.txt}",
+      "model": "openai/gpt-4",
+      "temperature": 0.1,
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": true
+      }
+    }
+  },
+  "_comments": {
+    "usage": "This template shows how to add custom modes alongside kodik modes",
+    "model_options": [
+      "anthropic/claude-3.5-sonnet",
+      "anthropic/claude-3-haiku",
+      "openai/gpt-4",
+      "openai/gpt-3.5-turbo"
+    ],
+    "temperature": "Range: 0.0 (deterministic) to 1.0 (creative)",
+    "tools": {
+      "write": "Create new files",
+      "edit": "Modify existing files",
+      "bash": "Execute shell commands",
+      "read": "Read file contents",
+      "grep": "Search text within files",
+      "glob": "Find files by pattern",
+      "webfetch": "Fetch content from URLs"
+    },
+    "prompt_options": {
+      "inline": "Write prompt directly as string",
+      "file": "Use {file:./path/to/prompt.txt} to load from file"
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mode": {
+    "kodik-spec": {
+      "prompt": "{file:./.opencode/prompts/kodik-spec.txt}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": true
+      }
+    },
+    "kodik-design": {
+      "prompt": "{file:./.opencode/prompts/kodik-design.txt}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": false
+      }
+    },
+    "kodik-tasks": {
+      "prompt": "{file:./.opencode/prompts/kodik-tasks.txt}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": false,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": false
+      }
+    },
+    "kodik-agent": {
+      "prompt": "{file:./.opencode/prompts/kodik-agent.txt}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": false
+      }
+    },
+    "kodik-review-planner": {
+      "prompt": "{file:./.opencode/prompts/kodik-review-planner.txt}",
+      "tools": {
+        "write": true,
+        "edit": false,
+        "bash": false,
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "webfetch": true
+      }
+    }
+  }
+}
