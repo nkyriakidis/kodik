@@ -13,18 +13,23 @@ An open-source implementation of the Amazon Kiro Agent modes, designed and maint
 
 ## Key Features
 
-- **One-line installer**: Global CLI tool installation via curl
+- **Production-ready Go CLI** with comprehensive backup and rollback system
+- **Cross-platform binaries** for macOS, Linux, and Windows
+- **Atomic installations** with automatic rollback on failure
+- **Modification detection** using SHA256 checksums with force override
+- **Secure archive extraction** with path traversal protection
 - Specification-driven workflow for software projects
 - Five specialized agent modes: Spec, Design, Tasks, Agent, and Review Planner
 - Markdown-based planning and execution documents
 - Behavior-driven development (BDD) with Cucumber notation
 - Automated, sequential task execution
-- Backup and rollback protection for existing configurations
 - Easily extensible and portable to other agent platforms
 
 ## Built With
 
-- Markdown
+- **Go** - CLI implementation with comprehensive backup and rollback system
+- **urfave/cli** - Command-line interface framework  
+- Markdown-based configuration files
 - GitHub Copilot & Roo Code (for agent execution)
 - [Kiro.dev](https://kiro.dev) (conceptual inspiration)
 
@@ -34,30 +39,52 @@ An open-source implementation of the Amazon Kiro Agent modes, designed and maint
 
 ### Prerequisites
 
+- **Go 1.21+** (for building from source)
 - A compatible agent platform (such as GitHub Copilot, Roo Code, or OpenCode)
 - Basic knowledge of Markdown and Git
-- `curl` and `bash` (for CLI installation)
 
 ### Installation
 
-#### Option 1: CLI Installation (Recommended)
+#### Option 1: Download Pre-built Binary (Recommended)
 
-Install `kodik` as a global command-line tool with a single command:
+Download the latest release for your platform:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nkyriakidis/kodik/main/kodik | sudo tee /usr/local/bin/kodik > /dev/null && sudo chmod +x /usr/local/bin/kodik
+# For macOS/Linux (Intel)
+curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/kodik-linux-amd64 -o kodik
+chmod +x kodik
+sudo mv kodik /usr/local/bin/
+
+# For macOS (Apple Silicon)
+curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/kodik-darwin-arm64 -o kodik
+chmod +x kodik  
+sudo mv kodik /usr/local/bin/
+
+# For Windows
+curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/kodik-windows-amd64.exe -o kodik.exe
+# Move kodik.exe to a directory in your PATH
+```
+
+#### Option 2: Build from Source
+
+```sh
+git clone https://github.com/nkyriakidis/kodik.git
+cd kodik
+go build -o kodik ./cmd/kodik
+sudo mv kodik /usr/local/bin/
 ```
 
 Then use it in any project directory:
 
 ```sh
 cd your-project
-kodik                    # Install both .github and .roomodes
-kodik --github          # Install only GitHub Copilot modes
-kodik --roo             # Install only Roo Code configuration
+kodik all                # Install all components (.github, .roomodes, opencode)
+kodik github             # Install only GitHub Copilot modes
+kodik roo                # Install only Roo Code configuration
+kodik opencode           # Install only OpenCode configuration
 ```
 
-#### Option 2: Manual Installation
+#### Manual Installation
 
 1. Clone the repo:
    ```sh
@@ -67,38 +94,63 @@ kodik --roo             # Install only Roo Code configuration
    ```sh
    cd kodik
    ```
-3. Run the install script directly:
+3. Build and install the CLI:
    ```sh
-   ./kodik
+   go build -o kodik ./cmd/kodik
+   sudo mv kodik /usr/local/bin/
    ```
 
-The script will automatically create the necessary directory structure and copy the agent mode definitions to your project.
+The CLI will automatically handle downloading, validating, and installing the necessary configurations to your project.
 
 ## Usage
 
 ### Quick Start with CLI
 
-After installing `kodik` globally, navigate to any project directory and run:
+After installing `kodik`, navigate to any project directory and run:
 
 ```sh
-kodik  # Sets up both GitHub Copilot and Roo Code configurations
+kodik all  # Sets up GitHub Copilot, Roo Code, and OpenCode configurations
 ```
 
-### CLI Options
+### CLI Commands
 
 ```sh
-kodik [OPTIONS] [MODE]
+NAME:
+   kodik - Manage kodik repository configurations
 
-OPTIONS:
-  -h, --help      Show usage information
-  -f, --force     Skip backups and confirmations
-  -d, --dry-run   Preview actions without execution
+USAGE:
+   kodik [global options] command [command options]
 
-MODE:
-  --github, -g    Install/update only .github directory
-  --roo, -r       Install/update only .roomodes file
-  (no mode)       Install/update both components (default)
+COMMANDS:
+   github    Install/update .github directory
+   roo       Install/update .roomodes file
+   opencode  Install/update .kodik/opencode directory
+   all       Install/update all components
+   help, h   Shows a list of commands or help for one command
+
+GLOBAL OPTIONS:
+   --force     Skip backups and confirmations (default: false)
+   --dry-run   Preview actions without execution (default: false)
+   --help, -h  show help
 ```
+
+### Advanced Features
+
+#### Backup and Restore System
+The CLI automatically creates timestamped backups before making changes:
+
+```sh
+kodik github --force    # Force update, skipping confirmation prompts
+kodik roo --dry-run     # Preview changes without executing
+```
+
+Backups are stored in `.kodik-state/backups/` with restoration logs for rollback operations.
+
+#### Modification Detection
+The CLI detects local modifications using SHA256 checksums:
+- Warns when local changes would be overwritten
+- Requires `--force` flag to proceed with detected modifications
+- Maintains installation history for tracking changes
 
 ### Using Agent Modes
 
@@ -165,6 +217,9 @@ Each mode has specific instructions and workflows defined in the corresponding `
 ### Roo Code
 `kodik` also supports **Roo Code** through a comprehensive configuration file (`.roomodes`) that defines all specialized modes.
 
+### OpenCode  
+`kodik` supports **OpenCode** through configuration files in the `.kodik/opencode/` directory that define specialized agent modes.
+
 ### Future Provider Support
 The mode definitions are designed to be easily portable to other AI coding assistants.
 
@@ -174,22 +229,24 @@ The mode definitions are designed to be easily portable to other AI coding assis
 
 1. **Install kodik globally** (one-time setup):
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/nkyriakidis/kodik/main/kodik | sudo tee /usr/local/bin/kodik > /dev/null && sudo chmod +x /usr/local/bin/kodik
+   # Download latest binary for your platform
+   curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/kodik-linux-amd64 -o kodik
+   chmod +x kodik && sudo mv kodik /usr/local/bin/
    ```
 
 2. **Navigate to your project** and run:
    ```sh
    cd your-project
-   kodik
+   kodik all
    ```
 
-This automatically creates the `.github/chatmodes/` directory with all chat mode definitions and the `.roomodes` file.
+This automatically creates the `.github/chatmodes/` directory with all chat mode definitions, the `.roomodes` file, and OpenCode configurations.
 
 ### Setting Up GitHub Copilot Chat Modes
 
 1. **Automated setup** (creates the files automatically):
    ```sh
-   kodik --github
+   kodik github
    ```
 
 2. **Manual setup** (if you prefer to customize):
@@ -219,7 +276,7 @@ This automatically creates the `.github/chatmodes/` directory with all chat mode
 
 1. **Automated setup** (creates the file automatically):
    ```sh
-   kodik --roo
+   kodik roo
    ```
    
    Or manually copy the `.roomodes` file from this repository to the root of your project directory.
@@ -312,14 +369,47 @@ This creates a complete spec-driven development cycle that ensures thorough plan
 
 This repository contains the following key components:
 
+- **`cmd/kodik/`** - Go CLI application source code
+- **`internal/kodik/`** - Core implementation packages (backup, restore, download, validation)
 - **`.github/chatmodes/`** - GitHub Copilot chat mode definitions
-- **`.roomodes`** - Roo Code mode configuration file
-- **`kodik`** - CLI installer script
+- **`.roomodes`** - Roo Code mode configuration file  
+- **`.kodik/opencode/`** - OpenCode configuration files
+- **`go.mod`, `go.sum`** - Go module dependencies
 - **`.kodik-state/`** - State directory (created after installation, should be gitignored)
+
+### CLI Architecture
+
+The Go CLI provides:
+- **Comprehensive backup system** with timestamped snapshots
+- **Modification detection** using SHA256 checksums
+- **Atomic installations** with rollback on failure
+- **Multi-format support** for tar.gz, zip, and raw file downloads
+- **Secure extraction** with path traversal protection
+- **Colorized output** for better user experience
 
 ## Development
 
-This repository does not contain executable code or automated tests. It is a configuration and workflow definition resource for agent-powered development.
+This repository contains a complete Go CLI implementation with comprehensive backup and restoration capabilities. The CLI is production-ready and includes:
+
+- Full test coverage for core functionality
+- Secure archive extraction with path validation
+- Robust error handling with specific exit codes
+- Atomic operations with automatic rollback
+- State management and installation tracking
+
+### Building from Source
+
+```sh
+git clone https://github.com/nkyriakidis/kodik.git
+cd kodik
+go build -o kodik ./cmd/kodik
+```
+
+### Running Tests
+
+```sh
+go test ./...
+```
 
 ## Contributing
 

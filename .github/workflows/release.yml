@@ -1,0 +1,124 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            output: kodik-linux-amd64
+          - goos: darwin
+            goarch: arm64
+            output: kodik-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            output: kodik-windows-amd64.exe
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        go build -ldflags="-s -w" -o ${{ matrix.output }} ./cmd/kodik
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.output }}
+        path: ${{ matrix.output }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+        merge-multiple: true
+
+    - name: List artifacts
+      run: ls -la ./artifacts/
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: build-${{ github.sha }}
+        release_name: Release build-${{ github.sha }}
+        body: |
+          Automated build from commit ${{ github.sha }}
+          
+          ## Downloads
+          - **Linux (AMD64)**: `kodik-linux-amd64`
+          - **macOS (Apple Silicon)**: `kodik-darwin-arm64`  
+          - **Windows (AMD64)**: `kodik-windows-amd64.exe`
+          
+          ## Installation
+          
+          ### Linux/macOS
+          ```sh
+          curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/<binary-name> -o kodik
+          chmod +x kodik
+          sudo mv kodik /usr/local/bin/
+          ```
+          
+          ### Windows
+          ```sh
+          curl -L https://github.com/nkyriakidis/kodik/releases/latest/download/kodik-windows-amd64.exe -o kodik.exe
+          ```
+        draft: false
+        prerelease: false
+
+    - name: Upload Linux Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/kodik-linux-amd64
+        asset_name: kodik-linux-amd64
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/kodik-darwin-arm64
+        asset_name: kodik-darwin-arm64
+        asset_content_type: application/octet-stream
+
+    - name: Upload Windows Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/kodik-windows-amd64.exe
+        asset_name: kodik-windows-amd64.exe
+        asset_content_type: application/octet-stream
