@@ -123,6 +123,27 @@ func saveChecksums(file string, checks map[string]string) error {
 	return os.WriteFile(file, []byte(sb.String()), 0o644)
 }
 
+// ComputeChecksumsGraceful is a wrapper around ComputeChecksums that returns an empty
+// map (and nil error) when the target path does not exist. This enables callers
+// to treat missing files/directories as empty components (e.g., fresh installs)
+// instead of failing with a filesystem error.
+func ComputeChecksumsGraceful(root string) (map[string]string, error) {
+	checks := map[string]string{}
+	info, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Missing component: treat as empty set of files.
+			return checks, nil
+		}
+		return nil, err
+	}
+	// Delegate to existing logic when the path exists.
+	if !info.IsDir() {
+		return ComputeChecksums(root)
+	}
+	return ComputeChecksums(root)
+}
+
 // DetectModifications compares current checksums with stored ones and returns whether changes exist and a human summary.
 func DetectModifications(root, checksumsFile string) (bool, string, error) {
 	if err := ensureStateDirs(); err != nil {
@@ -139,9 +160,70 @@ func DetectModifications(root, checksumsFile string) (bool, string, error) {
 	if len(prev) == 0 {
 		return false, "No previous checksums; treating as first run.", nil
 	}
+	changed, summary := detectChanges(prev, cur)
+	return changed, summary, nil
+}
+
+// SaveComponentChecksums recomputes and persists checksums for the component.
+func SaveComponentChecksums(root, checksumsFile string) error {
+	checks, err := ComputeChecksums(root)
+	if err != nil {
+		return err
+	}
+	return saveChecksums(checksumsFile, checks)
+}
+
+// SaveComponentChecksumsSelective saves checksums only for files matching provided glob patterns.
+func SaveComponentChecksumsSelective(root, checksumsFile string, patterns []string) error {
+	checks, err := ComputeChecksums(root)
+	if err != nil {
+		return err
+	}
+	filtered := map[string]string{}
+	for path, sum := range checks {
+		for _, pattern := range patterns {
+			matched, matchErr := filepath.Match(pattern, path)
+			if matchErr != nil {
+				return matchErr
+			}
+			if matched {
+				filtered[path] = sum
+				break
+			}
+		}
+	}
+	return saveChecksums(checksumsFile, filtered)
+}
+
+// DetectModificationsGraceful performs modification detection but treats a missing
+// root path as an empty set of files (fresh install) instead of an error.
+// Returns (changed, summary, error).
+func DetectModificationsGraceful(root, checksumsFile string) (bool, string, error) {
+	if err := ensureStateDirs(); err != nil {
+		return false, "", err
+	}
+	prev, err := loadChecksums(checksumsFile)
+	if err != nil {
+		return false, "", err
+	}
+	cur, err := ComputeChecksumsGraceful(root)
+	if err != nil {
+		return false, "", err
+	}
+	if len(prev) == 0 {
+		if len(cur) == 0 {
+			return false, "No existing files; treating as fresh installation.", nil
+		}
+		return false, "No previous checksums; treating as first run.", nil
+	}
+	changed, summary := detectChanges(prev, cur)
+	return changed, summary, nil
+}
+
+// detectChanges compares previous and current checksum maps and returns change status and summary.
+func detectChanges(prev, cur map[string]string) (bool, string) {
 	changed := false
 	var details []string
-	// Detect changed or removed
 	for path, oldSum := range prev {
 		if newSum, ok := cur[path]; ok {
 			if newSum != oldSum {
@@ -153,21 +235,25 @@ func DetectModifications(root, checksumsFile string) (bool, string, error) {
 			details = append(details, fmt.Sprintf("Removed: %s", path))
 		}
 	}
-	// Detect added
 	for path := range cur {
 		if _, ok := prev[path]; !ok {
 			changed = true
 			details = append(details, fmt.Sprintf("Added: %s", path))
 		}
 	}
-	return changed, strings.Join(details, "; "), nil
+	return changed, strings.Join(details, "; ")
 }
 
-// SaveComponentChecksums recomputes and persists checksums for the component.
-func SaveComponentChecksums(root, checksumsFile string) error {
-	checks, err := ComputeChecksums(root)
-	if err != nil {
-		return err
+// Kodik managed file patterns (used for selective checksum saving)
+var (
+	githubKodikPatterns = []string{
+		"chatmodes/*.chatmode.md",
+		"prompts/*.prompt.md",
 	}
-	return saveChecksums(checksumsFile, checks)
-}
+	roomodesKodikPatterns = []string{
+		".roomodes",
+	}
+	opencodeKodikPatterns = []string{
+		".opencode/*.json",
+	}
+)

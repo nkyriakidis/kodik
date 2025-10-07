@@ -12,7 +12,7 @@ import (
 func main() {
 	app := &cli.App{
 		Name:  "kodik",
-		Usage: "Manage kodik repository configurations",
+		Usage: "Manage kodik repository configurations (preserves user files; provides backups)",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "force",
@@ -26,7 +26,7 @@ func main() {
 		Commands: []*cli.Command{
 			{
 				Name:  "github",
-				Usage: "Install/update .github directory",
+				Usage: "Install/update .github directory (selective merge; preserves workflows, CODEOWNERS, custom files)",
 				Action: func(c *cli.Context) error {
 					force := c.Bool("force")
 					dryRun := c.Bool("dry-run")
@@ -41,7 +41,7 @@ func main() {
 			},
 			{
 				Name:  "roo",
-				Usage: "Install/update .roomodes file",
+				Usage: "Install/update .roomodes file (graceful when missing; fresh install safe)",
 				Action: func(c *cli.Context) error {
 					force := c.Bool("force")
 					dryRun := c.Bool("dry-run")
@@ -56,7 +56,7 @@ func main() {
 			},
 			{
 				Name:  "opencode",
-				Usage: "Install/update .opencode directory",
+				Usage: "Install/update .opencode directory (graceful when missing; creates placeholder)",
 				Action: func(c *cli.Context) error {
 					force := c.Bool("force")
 					dryRun := c.Bool("dry-run")
@@ -71,7 +71,7 @@ func main() {
 			},
 			{
 				Name:  "all",
-				Usage: "Install/update all components",
+				Usage: "Install/update all components (preservation + graceful handling across github, roomodes, opencode)",
 				Action: func(c *cli.Context) error {
 					force := c.Bool("force")
 					dryRun := c.Bool("dry-run")
