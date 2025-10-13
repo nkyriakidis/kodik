@@ -38,12 +38,12 @@ This document outlines the technical design for implementing the User Authentica
 
 ---
 
-### Feature: User Login
+## Feature: User Login
 
-#### 1. Technical Overview
+### 1. Technical Overview
 To implement the User Login feature, we will modify the existing `LoginView` component and the `AuthService`. No database schema changes are required. The core logic will involve calling the `/api/auth/login` endpoint and handling the JWT response.
 
-#### 2. UI Component Hierarchy & Wireframe
+### 2. UI Component Hierarchy & Wireframe
 
 The UI will be contained within the `LoginView.vue` component.
 
@@ -77,7 +77,7 @@ LoginView
 +------------------------------------------+
 ```
 
-#### 3. Data Flow for Successful Login
+### 3. Data Flow for Successful Login
 
 **Diagram:**
 ```
@@ -99,7 +99,7 @@ LoginView
 
 ---
 
-### Feature: Password Reset
+## Feature: Password Reset
 *(...similar detailed design for this feature would follow...)*
 ```
 

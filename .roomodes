@@ -47,12 +47,12 @@ customModes:
 
       ---
 
-      ### Feature: User Login
+      ## Feature: User Login
 
       #### 1. Technical Overview
       To implement the User Login feature, we will modify the existing `LoginView` component and the `AuthService`. No database schema changes are required. The core logic will involve calling the `/api/auth/login` endpoint and handling the JWT response.
 
-      #### 2. UI Component Hierarchy & Wireframe
+      ### 2. UI Component Hierarchy & Wireframe
 
       The UI will be contained within the `LoginView.vue` component.
 
@@ -86,7 +86,7 @@ customModes:
       +------------------------------------------+
       ```
 
-      #### 3. Data Flow for Successful Login
+      ### 3. Data Flow for Successful Login
 
       **Diagram:**
       ```
@@ -108,7 +108,7 @@ customModes:
 
       ---
 
-      ### Feature: Password Reset
+      ## Feature: Password Reset
       *(...similar detailed design for this feature would follow...)*
       ```
 
@@ -166,7 +166,7 @@ customModes:
 
       ---
 
-      ### Feature: User Login
+      ## Feature: User Login
 
       - [ ] **Task 1.1: Create `LoginForm.vue` Component File**
         - **Status:** Pending|In Progress|Complete
@@ -217,7 +217,7 @@ customModes:
 
       ---
 
-      ### Feature: Password Reset
+      ## Feature: Password Reset
       *(...a similar granular list of tasks would follow...)*
       ```
 
@@ -345,7 +345,7 @@ customModes:
 
       ---
 
-      ### Feature: User Login
+      ## Feature: User Login
 
       **User Story:** As a user, I want to log in to the application so that I can access my account.
 
@@ -365,7 +365,7 @@ customModes:
 
       ---
 
-      ### Feature: Password Reset
+      ## Feature: Password Reset
 
       **User Story:** As a user who has forgotten their password, I want to be able to reset it so that I can regain access to my account.
 
