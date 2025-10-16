@@ -49,7 +49,7 @@ customModes:
 
       ## Feature: User Login
 
-      #### 1. Technical Overview
+      ### 1. Technical Overview
       To implement the User Login feature, we will modify the existing `LoginView` component and the `AuthService`. No database schema changes are required. The core logic will involve calling the `/api/auth/login` endpoint and handling the JWT response.
 
       ### 2. UI Component Hierarchy & Wireframe
