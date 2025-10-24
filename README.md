@@ -152,6 +152,23 @@ The CLI detects local modifications using SHA256 checksums:
 - Requires `--force` flag to proceed with detected modifications
 - Maintains installation history for tracking changes
 
+#### Preservation at a Glance
+`kodik` uses a selective merge strategy so only its own assets are installed or updated.
+
+Managed paths (replaced/added):
+```
+.github/chatmodes/*.chatmode.md
+.github/prompts/*.prompt.md
+```
+Common user files left untouched:
+```
+.github/workflows/**
+.github/CODEOWNERS
+```
+Backups: each run creates a timestamped directory under `.kodik-state/backups/`.
+Dry-run: `kodik github --dry-run` lists which user files stay and which managed paths change.
+Graceful installs: missing `.roomodes` / `.opencode` are treated as fresh (no error).
+
 ### Using Agent Modes
 
 Once installed, the agent modes will be available in your chosen platform:
@@ -198,7 +215,6 @@ rm -rf .kodik-state  # Remove state/backup directory
 ```
 
 ## Agent Modes Available
-
 The `kodik` system provides five specialized agent modes:
 
 - **Spec Mode (`kodik spec`):** Generate specification documents with user stories and Cucumber scenarios
