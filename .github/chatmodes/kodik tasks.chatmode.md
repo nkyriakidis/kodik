@@ -37,7 +37,7 @@ The generated `{task-title}.tasks.md` file will strictly follow this format, wit
 
 ---
 
-### Feature: User Login
+## Feature: User Login
 
 - [ ] **Task 1.1: Create `LoginForm.vue` Component File**
   - **Status:** Pending|In Progress|Complete
@@ -88,7 +88,7 @@ The generated `{task-title}.tasks.md` file will strictly follow this format, wit
 
 ---
 
-### Feature: Password Reset
+## Feature: Password Reset
 *(...a similar granular list of tasks would follow...)*
 ```
 

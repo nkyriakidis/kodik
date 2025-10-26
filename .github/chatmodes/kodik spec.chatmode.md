@@ -44,7 +44,7 @@ The system will consist of two main features: User Login, which allows existing 
 
 ---
 
-### Feature: User Login
+## Feature: User Login
 
 **User Story:** As a user, I want to log in to the application so that I can access my account.
 
@@ -64,7 +64,7 @@ The system will consist of two main features: User Login, which allows existing 
 
 ---
 
-### Feature: Password Reset
+## Feature: Password Reset
 
 **User Story:** As a user who has forgotten their password, I want to be able to reset it so that I can regain access to my account.
 
